@@ -1,0 +1,746 @@
+# ============================================================================
+# vocab/shuttle-shapes.ttl — SHACL shapes for Shuttle v0.2 grammar
+# well-formedness (mod:shu-shapes)
+#
+# Grammar well-formedness = SHACL conformance (RFC 0001, self-hosting):
+# arities, one-equation-per-occurrence, acyclicity / L-attributedness as a
+# shape, positional term typing (incl. RDF 1.2 triple terms), Skolem
+# linearity, IRI-on-extensible-resources — checkable by ANY RDF stack with
+# zero Shuttle tooling. The deeper theorems (LL-disjointness, strictness
+# contracts, L3 totality, lexical conservativity) sit above, in the compiler.
+#
+# VALIDATE OVER THE MERGED IMPORT CLOSURE: these shapes are written against
+# the named-graph union of a module's hash-pinned transitive imports
+# (including mod:shu-ontology, whose rdfs:subClassOf triples the typing
+# shapes traverse). Closure-dependent constraints (guard-free fallback,
+# profile-imports-profiles) are vacuous on a lone delta graph and gain teeth
+# on the closure — by design.
+#
+# Meta-shape self-application (RFC closure test 3): this graph validates both
+# its own triples and mod:shu-ontology's.
+# ============================================================================
+
+@prefix shtl: <https://w3id.org/shuttle/vocab#> .
+@prefix shux: <https://w3id.org/shuttle/expr#> .
+@prefix mod:  <https://w3id.org/shuttle/mod/> .
+@prefix shsh: <https://w3id.org/shuttle/shapes#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix mf:   <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+mod:shu-shapes
+  a owl:Ontology , shtl:Module ;
+  rdfs:label "Shuttle v0.2 well-formedness shapes"@en ;
+  rdfs:comment "SHACL encoding of Shuttle grammar well-formedness. Conformance of a module's merged import closure against these shapes is the definition of a well-formed Shuttle grammar graph."@en ;
+  shtl:specRef "RFC 0001 — Shuttle v0.2 design (rdf-shuttle docs/rfc/0001-shuttle-v0.2-design.md, 2026-07)" ;
+  shtl:imports mod:shu-ontology ;
+  owl:versionInfo "0.2.0" ;
+  # Prefix declarations for the SPARQL-based constraints below.
+  sh:declare
+    [ sh:prefix "shtl" ; sh:namespace "https://w3id.org/shuttle/vocab#"^^xsd:anyURI ] ,
+    [ sh:prefix "shux" ; sh:namespace "https://w3id.org/shuttle/expr#"^^xsd:anyURI ] ,
+    [ sh:prefix "rdf"  ; sh:namespace "http://www.w3.org/1999/02/22-rdf-syntax-ns#"^^xsd:anyURI ] ,
+    [ sh:prefix "rdfs" ; sh:namespace "http://www.w3.org/2000/01/rdf-schema#"^^xsd:anyURI ] ,
+    [ sh:prefix "xsd"  ; sh:namespace "http://www.w3.org/2001/XMLSchema#"^^xsd:anyURI ] .
+
+# ----------------------------------------------------------------------------
+# Reusable expression shape: an expression position holds either a CONSTANT
+# RDF term (IRI or literal, denoting itself) or a typed shux: expression node.
+# ----------------------------------------------------------------------------
+
+shsh:ExprShape
+  a sh:NodeShape ;
+  rdfs:label "expression"@en ;
+  sh:or (
+    [ sh:nodeKind sh:IRI ]                       # constant IRI (or Fn/guard ref)
+    [ sh:nodeKind sh:Literal ]                   # constant literal
+    [ sh:class shux:App ]
+    [ sh:class shux:AttrRef ]
+    [ sh:class shux:VarRef ]
+    [ sh:class shux:Case ]
+    [ sh:class shux:Skolem ]
+    [ sh:class shux:And ]
+    [ sh:class shux:Or ]
+    [ sh:class shux:Not ]
+  ) .
+
+shsh:AttrDeclShape
+  a sh:NodeShape ;
+  rdfs:label "attribute declaration arity"@en ;
+  sh:targetObjectsOf shtl:inh , shtl:syn , shtl:chain ;
+  sh:property
+    [ sh:path shtl:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ;
+      sh:message "AttrDecl: exactly one shtl:name (xsd:string) required." ] ,
+    [ sh:path shtl:type ; sh:minCount 1 ; sh:maxCount 1 ;
+      sh:message "AttrDecl: exactly one shtl:type required." ] ,
+    [ sh:path shtl:default ; sh:maxCount 1 ;
+      sh:message "AttrDecl: at most one shtl:default." ] .
+
+# ============================================================================
+# 1. MODULE LAYER
+# ============================================================================
+
+shsh:ModuleShape
+  a sh:NodeShape ;
+  rdfs:label "module"@en ;
+  sh:targetClass shtl:Module ;
+  sh:nodeKind sh:IRI ;
+  sh:property
+    [ sh:path shtl:specRef ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ;
+      sh:message "Module: mandatory spec pin — exactly one shtl:specRef string (document + WD date)." ] ,
+    [ sh:path shtl:imports ; sh:nodeKind sh:IRI ;
+      sh:message "Module: shtl:imports values must be module IRIs (named-graph names)." ] ,
+    [ sh:path shtl:start ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+      sh:message "Module: at most one shtl:start, an IRI-named production." ] ,
+    [ sh:path shtl:emits ; sh:maxCount 1 ;
+      sh:in ( shtl:TripleSet shtl:QuadSet shtl:TripleBag shtl:QuadBag ) ;
+      sh:message "Module: shtl:emits must be one of TripleSet/QuadSet/TripleBag/QuadBag." ] ,
+    [ sh:path shtl:chain ; sh:nodeKind sh:BlankNodeOrIRI ;
+      sh:message "Module: shtl:chain values are AttrDecl nodes." ] .
+
+# No import cycles of length 1 (the DAG check for arbitrary cycles is
+# closure-level; length-1 and length-2 are catchable in SPARQL).
+shsh:ImportAcyclicityShape
+  a sh:NodeShape ;
+  rdfs:label "import acyclicity (short cycles)"@en ;
+  sh:targetClass shtl:Module ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "Module import cycle: shtl:imports must form a DAG (self-import or 2-cycle found)." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this ?value WHERE {
+        $this shtl:imports+ ?value .
+        FILTER (?value = $this)
+      }
+    """ ;
+  ] .
+
+shsh:ProfileShape
+  a sh:NodeShape ;
+  rdfs:label "profile"@en ;
+  sh:targetClass shtl:Profile ;
+  sh:property
+    [ sh:path shtl:profileOf ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+      sh:message "Profile: exactly one shtl:profileOf base module." ] ,
+    [ sh:path shtl:excludes ; sh:nodeKind sh:IRI ;
+      sh:message "Profile: shtl:excludes names alternative/terminal IRIs." ] ,
+    [ sh:path shtl:includesOnly ; sh:nodeKind sh:IRI ] ;
+  # Profiles import only profiles (an extension cannot un-exclude).
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "Profile: profiles may import only profiles (closure-level check)." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this ?value WHERE {
+        $this shtl:imports ?value .
+        ?value a shtl:Module .
+        FILTER NOT EXISTS { ?value a shtl:Profile }
+        FILTER NOT EXISTS { ?value a shtl:TestSuite }
+      }
+    """ ;
+  ] .
+
+# ============================================================================
+# 2. SYNTAX LAYER — arities and IRI-on-extensible-resources
+# ============================================================================
+
+# IRI-ON-EXTENSIBLE-RESOURCES, in one shape (the RFC's list verbatim):
+# productions, alternatives, templates, terminals, tests, policies, isos.
+# Blank nodes remain legal only for non-extensible internals (items,
+# expressions, attribute declarations, occurrences, let bindings).
+shsh:ExtensibleResourceIriShape
+  a sh:NodeShape ;
+  rdfs:label "IRI on extensible resources"@en ;
+  sh:targetClass shtl:Production , shtl:Alternative , shtl:TripleTemplate ,
+                 shtl:Terminal , shtl:Iso , shtl:PrintPolicy ,
+                 shtl:Test , shtl:TestSuite ;
+  sh:nodeKind sh:IRI ;
+  sh:message "Extensible resources (productions, alternatives, templates, terminals, tests, policies, isos) must be IRI-identified: extension = adding a triple on that IRI from another named graph." .
+
+shsh:ProductionShape
+  a sh:NodeShape ;
+  rdfs:label "production"@en ;
+  sh:targetClass shtl:Production ;
+  sh:property
+    [ sh:path shtl:strictness ; sh:maxCount 1 ;
+      sh:or (
+        [ sh:in ( shtl:Immediate shtl:AtEnd ) ]
+        [ sh:class shtl:AfterTokens ;
+          sh:property [ sh:path shtl:k ; sh:minCount 1 ; sh:maxCount 1 ;
+                        sh:datatype xsd:integer ; sh:minInclusive 0 ] ]
+      ) ;
+      sh:message "Production: shtl:strictness is shtl:Immediate, shtl:AtEnd, or [a shtl:AfterTokens; shtl:k n] with one non-negative integer k. Functional across the closure." ] ,
+    [ sh:path shtl:buffered ; sh:maxCount 1 ; sh:datatype xsd:boolean ;
+      sh:message "Production: shtl:buffered is a single boolean (the visible streaming opt-out)." ] .
+
+shsh:AlternativeShape
+  a sh:NodeShape ;
+  rdfs:label "alternative"@en ;
+  sh:targetClass shtl:Alternative ;
+  sh:property
+    [ sh:path shtl:alternativeOf ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+      sh:message "Alternative: exactly one shtl:alternativeOf production IRI." ] ,
+    [ sh:path shtl:items ; sh:minCount 1 ; sh:maxCount 1 ;
+      sh:message "Alternative: exactly one shtl:items list (the single ordered syntax row; epsilon = rdf:nil)." ] ,
+    [ sh:path shtl:prefer ; sh:maxCount 1 ; sh:nodeKind sh:Literal ;
+      sh:message "Alternative: at most one shtl:prefer rank." ] ;
+  # Every member of the closed items list must be a typed item node.
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "Alternative: every member of shtl:items must be typed shtl:Lit / shtl:TerminalRef / shtl:NonterminalRef / shtl:Opt / shtl:Star / shtl:Plus / shtl:SepList." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this ?value WHERE {
+        $this shtl:items ?l .
+        ?l rdf:rest*/rdf:first ?value .
+        FILTER NOT EXISTS {
+          ?value a ?c .
+          ?c rdfs:subClassOf* shtl:Item .
+        }
+      }
+    """ ;
+  ] .
+
+# --- item arities -----------------------------------------------------------
+
+shsh:LitShape
+  a sh:NodeShape ;
+  sh:targetClass shtl:Lit ;
+  sh:property [ sh:path shtl:text ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ;
+    sh:message "Lit: exactly one shtl:text string." ] .
+
+shsh:TerminalRefShape
+  a sh:NodeShape ;
+  sh:targetClass shtl:TerminalRef ;
+  sh:property
+    [ sh:path shtl:terminal ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+      sh:message "TerminalRef: exactly one shtl:terminal IRI." ] ,
+    [ sh:path shtl:bind ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+
+shsh:NonterminalRefShape
+  a sh:NodeShape ;
+  sh:targetClass shtl:NonterminalRef ;
+  sh:property
+    [ sh:path shtl:calls ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+      sh:message "NonterminalRef: exactly one shtl:calls production IRI." ] ,
+    [ sh:path shtl:bind ; sh:maxCount 1 ; sh:datatype xsd:string ] ,
+    [ sh:path shtl:args ; sh:maxCount 1 ;
+      sh:message "NonterminalRef: at most one shtl:args list (closed; positional against the callee's shtl:inh row)." ] .
+
+shsh:OptStarPlusShape
+  a sh:NodeShape ;
+  sh:targetClass shtl:Opt , shtl:Star , shtl:Plus ;
+  sh:property [ sh:path shtl:of ; sh:minCount 1 ; sh:maxCount 1 ;
+    sh:message "Opt/Star/Plus: exactly one shtl:of item (normative desugaring applies)." ] .
+
+shsh:SepListShape
+  a sh:NodeShape ;
+  sh:targetClass shtl:SepList ;
+  sh:property
+    [ sh:path shtl:of ; sh:minCount 1 ; sh:maxCount 1 ] ,
+    [ sh:path shtl:sep ; sh:minCount 1 ; sh:maxCount 1 ;
+      sh:message "SepList: exactly one shtl:sep item." ] .
+
+# ============================================================================
+# 3. SEMANTIC LAYER — equation arity, one-equation-per-occurrence,
+#    acyclicity / L-attributedness, Skolem linearity
+# ============================================================================
+
+shsh:EquationShape
+  a sh:NodeShape ;
+  rdfs:label "equation arity"@en ;
+  sh:targetClass shtl:Equation ;
+  sh:targetObjectsOf shtl:eq ;
+  sh:property
+    [ sh:path shtl:target ; sh:minCount 1 ; sh:maxCount 1 ;
+      sh:or (
+        [ sh:datatype xsd:string ]                 # own synthesized attribute
+        [ sh:node shsh:OccurrenceShape ]           # callee inherited occurrence
+      ) ;
+      sh:message "Equation: exactly one shtl:target — an own-attribute name string or an shtl:Occurrence (shtl:ofItem + shtl:attr)." ] ,
+    [ sh:path shtl:expr ; sh:minCount 1 ; sh:maxCount 1 ; sh:node shsh:ExprShape ;
+      sh:message "Equation: exactly one pure shtl:expr." ] ,
+    [ sh:path shtl:otherwise ; sh:maxCount 1 ; sh:node shsh:ExprShape ;
+      sh:message "Equation: at most one shtl:otherwise default." ] .
+
+shsh:OccurrenceShape
+  a sh:NodeShape ;
+  sh:property
+    [ sh:path shtl:ofItem ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ,
+    [ sh:path shtl:attr ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+
+shsh:LetBindingShape
+  a sh:NodeShape ;
+  rdfs:label "let binding arity"@en ;
+  sh:targetObjectsOf shtl:let ;
+  sh:property
+    [ sh:path shtl:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ;
+      sh:message "LetBinding: exactly one shtl:name." ] ,
+    [ sh:path shtl:expr ; sh:minCount 1 ; sh:maxCount 1 ; sh:node shsh:ExprShape ;
+      sh:message "LetBinding: exactly one shtl:expr." ] .
+
+# ONE EQUATION PER OCCURRENCE (FunctionalGrammarProperty, pairwise form):
+# across the merged closure, no two distinct equations on the same
+# alternative may define the same target. Reported on the alternative.
+shsh:OneEquationPerOccurrenceShape
+  a sh:NodeShape ;
+  rdfs:label "one equation per occurrence"@en ;
+  sh:targetClass shtl:Alternative ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "One-equation-per-occurrence violated: two equations on this alternative define the same attribute occurrence (displacing an imported equation is a FunctionalGrammarProperty conflict — report carries both named graphs)." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this ?value WHERE {
+        { $this shtl:eq ?e1 } UNION { ?e1 shtl:onAlternative $this . ?e1 a shtl:Equation }
+        { $this shtl:eq ?e2 } UNION { ?e2 shtl:onAlternative $this . ?e2 a shtl:Equation }
+        FILTER (?e1 != ?e2)
+        ?e1 shtl:target ?t1 .
+        ?e2 shtl:target ?t2 .
+        FILTER (
+          ?t1 = ?t2 ||
+          EXISTS {
+            ?t1 shtl:ofItem ?oi . ?t2 shtl:ofItem ?oi .
+            ?t1 shtl:attr ?a  . ?t2 shtl:attr ?a  .
+          }
+        )
+        BIND (?t1 AS ?value)
+      }
+    """ ;
+  ] .
+
+# Duplicate let names on one alternative (single-assignment).
+shsh:SingleAssignmentLetShape
+  a sh:NodeShape ;
+  rdfs:label "single-assignment lets"@en ;
+  sh:targetClass shtl:Alternative ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "Two let bindings on this alternative share a name (single-assignment violated)." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this ?value WHERE {
+        $this shtl:let ?l1 , ?l2 .
+        FILTER (?l1 != ?l2)
+        ?l1 shtl:name ?value .
+        ?l2 shtl:name ?value .
+      }
+    """ ;
+  ] .
+
+# ACYCLICITY (shape-level part): no equation or let may reference its own
+# defined name/attribute. (Longer cycles are rejected by the compiler's
+# ordered-AG dependency analysis; this shape catches the degenerate cycles
+# expressible in one graph pattern.)
+shsh:NoSelfReferenceShape
+  a sh:NodeShape ;
+  rdfs:label "equation self-reference"@en ;
+  sh:targetClass shtl:Alternative ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "Degenerate dependency cycle: a let/equation references the very name or attribute it defines." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this ?value WHERE {
+        {
+          $this shtl:let ?b .
+          ?b shtl:name ?value ; shtl:expr ?e .
+          ?e (rdf:type|!rdf:type)* ?ref .
+          ?ref a shux:VarRef ; shux:name ?value .
+        } UNION {
+          { $this shtl:eq ?q } UNION { ?q shtl:onAlternative $this . ?q a shtl:Equation }
+          ?q shtl:target ?value ; shtl:expr ?e .
+          FILTER (isLiteral(?value))
+          ?e (rdf:type|!rdf:type)* ?ref .
+          ?ref a shux:AttrRef ; shux:attr ?value .
+          FILTER NOT EXISTS { ?ref shux:item ?anyItem }
+        }
+      }
+    """ ;
+  ] .
+
+# L-ATTRIBUTEDNESS AS A SHAPE: an argument expression on a call item, and any
+# equation targeting an inherited occurrence of an item, may reference only
+# items STRICTLY LEFT of that item in the alternative's row. (The full
+# ordered-AG check with chained attributes is the compiler's; this shape is
+# the data-level L-flow discipline on the grammar graph.)
+shsh:LAttributedArgsShape
+  a sh:NodeShape ;
+  rdfs:label "L-attributed argument flow"@en ;
+  sh:targetClass shtl:Alternative ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "L-attributedness violated: a call's shtl:args expression references an item at or to the right of the call itself (inherited attributes must flow left-to-right)." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this ?value WHERE {
+        $this shtl:items ?l .
+        ?l rdf:rest* ?cellT .
+        ?cellT rdf:first ?call .
+        ?call shtl:args ?args .
+        ?args rdf:rest*/rdf:first ?argExpr .
+        ?argExpr (rdf:type|!rdf:type)* ?ref .
+        ?ref a shux:AttrRef ; shux:item ?value .
+        ?cellT rdf:rest* ?cellR .
+        ?cellR rdf:first ?rItem .
+        ?rItem shtl:bind ?value .
+      }
+    """ ;
+  ] .
+
+shsh:LAttributedInheritedEquationShape
+  a sh:NodeShape ;
+  rdfs:label "L-attributed inherited-occurrence equations"@en ;
+  sh:targetClass shtl:Alternative ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "L-attributedness violated: an equation for an inherited occurrence of item ?value references that item or one to its right." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this ?value WHERE {
+        { $this shtl:eq ?q } UNION { ?q shtl:onAlternative $this . ?q a shtl:Equation }
+        ?q shtl:target ?t ; shtl:expr ?e .
+        ?t shtl:ofItem ?tb .
+        $this shtl:items ?l .
+        ?l rdf:rest* ?cellT .
+        ?cellT rdf:first ?tItem .
+        ?tItem shtl:bind ?tb .
+        ?e (rdf:type|!rdf:type)* ?ref .
+        ?ref a shux:AttrRef ; shux:item ?value .
+        ?cellT rdf:rest* ?cellR .
+        ?cellR rdf:first ?rItem .
+        ?rItem shtl:bind ?value .
+      }
+    """ ;
+  ] .
+
+# SKOLEM LINEARITY (structural half): a shux:Skolem node is an explicit
+# binder — it must appear as the shtl:expr of exactly one let/equation, never
+# inline inside a larger expression and never shared between two binders.
+# (Print-mode single-site matching is the compiler's linearity analysis.)
+shsh:SkolemLinearityShape
+  a sh:NodeShape ;
+  rdfs:label "Skolem linearity"@en ;
+  sh:targetClass shux:Skolem ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "Skolem linearity violated: a shux:Skolem node must be the shtl:expr of exactly one binder (not inline in a larger expression, not shared)." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this WHERE {
+        {
+          ?parent ?pred $this .
+          FILTER (?pred NOT IN (shtl:expr, rdf:type))
+        } UNION {
+          ?p1 shtl:expr $this .
+          ?p2 shtl:expr $this .
+          FILTER (?p1 != ?p2)
+        }
+      }
+    """ ;
+  ] .
+
+# ============================================================================
+# 4. TRIPLE TEMPLATES — arity + POSITIONAL TERM TYPING (incl. RDF 1.2)
+#
+# The decidable data-level cases are shapes; positions holding opaque
+# references (VarRef into lets, Case results) defer to the compiler's type
+# checker. shux:tt returns TripleTermT ⋢ SubjT, so a triple term in subject
+# or predicate position is rejected HERE, on the grammar graph itself —
+# object-only nesting of RDF 1.2 triple terms is a static data-level fact.
+# ============================================================================
+
+shsh:TripleTemplateShape
+  a sh:NodeShape ;
+  rdfs:label "triple template"@en ;
+  sh:targetClass shtl:TripleTemplate ;
+  sh:property
+    [ sh:path shtl:onAlternative ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+      sh:message "TripleTemplate: exactly one shtl:onAlternative." ] ,
+    [ sh:path shtl:s ; sh:minCount 1 ; sh:maxCount 1 ; sh:node shsh:ExprShape ;
+      sh:message "TripleTemplate: exactly one subject expression." ] ,
+    [ sh:path shtl:p ; sh:minCount 1 ; sh:maxCount 1 ; sh:node shsh:ExprShape ;
+      sh:message "TripleTemplate: exactly one predicate expression." ] ,
+    [ sh:path shtl:o ; sh:minCount 1 ; sh:maxCount 1 ; sh:node shsh:ExprShape ;
+      sh:message "TripleTemplate: exactly one object expression." ] ,
+    [ sh:path shtl:g ; sh:maxCount 1 ; sh:node shsh:ExprShape ;
+      sh:message "TripleTemplate: at most one graph expression (default: the inherited g)." ] ,
+    [ sh:path shtl:when ; sh:maxCount 1 ; sh:node shsh:ExprShape ] ,
+    # Constant-term nodeKind discipline per position:
+    [ sh:path shtl:s ; sh:not [ sh:nodeKind sh:Literal ] ;
+      sh:message "Positional typing: a literal can never occupy subject position." ] ,
+    [ sh:path shtl:p ; sh:not [ sh:nodeKind sh:Literal ] ;
+      sh:message "Positional typing: a literal can never occupy predicate position." ] ,
+    [ sh:path shtl:g ; sh:not [ sh:nodeKind sh:Literal ] ;
+      sh:message "Positional typing: a literal can never occupy graph position." ] .
+
+# The four positional-typing SPARQL constraints live in one shape EACH (some
+# engines compile a single sh:sparql per shape node).
+
+# Subject position: constructed values must return a type ⊑ SubjT.
+shsh:SubjectPositionTypingShape
+  a sh:NodeShape ;
+  rdfs:label "subject position typing (RDF 1.2)"@en ;
+  sh:targetClass shtl:TripleTemplate ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "Positional typing (RDF 1.2): subject expression constructs a value whose type is not ⊑ shtl:SubjT (e.g. shux:tt — triple terms nest via the object position only)." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this ?value WHERE {
+        $this shtl:s ?e .
+        {
+          ?e a shux:App ; shux:fn ?f .
+          ?f shtl:returns ?value .
+          FILTER NOT EXISTS { ?value rdfs:subClassOf* shtl:SubjT }
+        } UNION {
+          ?e a shux:AttrRef ; shux:item ?ib ; shux:attr ?an .
+          $this shtl:onAlternative ?alt .
+          ?alt shtl:items/rdf:rest*/rdf:first ?item .
+          ?item shtl:bind ?ib ; shtl:calls ?prod .
+          ?prod shtl:syn ?ad .
+          ?ad shtl:name ?an ; shtl:type ?value .
+          FILTER NOT EXISTS { ?value rdfs:subClassOf* shtl:SubjT }
+        }
+      }
+    """ ;
+  ] .
+
+# Predicate position: must be a constant IRI or construct a type ⊑ Iri.
+shsh:PredicatePositionTypingShape
+  a sh:NodeShape ;
+  rdfs:label "predicate position typing"@en ;
+  sh:targetClass shtl:TripleTemplate ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "Positional typing: predicate expression constructs a value whose type is not ⊑ shtl:Iri." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this ?value WHERE {
+        $this shtl:p ?e .
+        {
+          ?e a shux:App ; shux:fn ?f .
+          ?f shtl:returns ?value .
+          FILTER NOT EXISTS { ?value rdfs:subClassOf* shtl:Iri }
+        } UNION {
+          ?e a shux:AttrRef ; shux:item ?ib ; shux:attr ?an .
+          $this shtl:onAlternative ?alt .
+          ?alt shtl:items/rdf:rest*/rdf:first ?item .
+          ?item shtl:bind ?ib ; shtl:calls ?prod .
+          ?prod shtl:syn ?ad .
+          ?ad shtl:name ?an ; shtl:type ?value .
+          FILTER NOT EXISTS { ?value rdfs:subClassOf* shtl:Iri }
+        } UNION {
+          ?e a shux:Skolem .
+          BIND (shtl:BnodeT AS ?value)   # a fresh bnode can never be a predicate
+        }
+      }
+    """ ;
+  ] .
+
+# Object position: anything ⊑ Term (this is where TripleTermT IS allowed).
+shsh:ObjectPositionTypingShape
+  a sh:NodeShape ;
+  rdfs:label "object position typing"@en ;
+  sh:targetClass shtl:TripleTemplate ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "Positional typing: object expression constructs a value whose type is not ⊑ shtl:Term." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this ?value WHERE {
+        $this shtl:o ?e .
+        {
+          ?e a shux:App ; shux:fn ?f .
+          ?f shtl:returns ?value .
+          FILTER NOT EXISTS { ?value rdfs:subClassOf* shtl:Term }
+        } UNION {
+          ?e a shux:AttrRef ; shux:item ?ib ; shux:attr ?an .
+          $this shtl:onAlternative ?alt .
+          ?alt shtl:items/rdf:rest*/rdf:first ?item .
+          ?item shtl:bind ?ib ; shtl:calls ?prod .
+          ?prod shtl:syn ?ad .
+          ?ad shtl:name ?an ; shtl:type ?value .
+          FILTER NOT EXISTS { ?value rdfs:subClassOf* shtl:Term }
+        }
+      }
+    """ ;
+  ] .
+
+# Graph position: must construct a type ⊑ GraphT (never TripleTermT/LiteralT).
+shsh:GraphPositionTypingShape
+  a sh:NodeShape ;
+  rdfs:label "graph position typing"@en ;
+  sh:targetClass shtl:TripleTemplate ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "Positional typing: graph expression constructs a value whose type is not ⊑ shtl:GraphT." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this ?value WHERE {
+        $this shtl:g ?e .
+        {
+          ?e a shux:App ; shux:fn ?f .
+          ?f shtl:returns ?value .
+          FILTER NOT EXISTS { ?value rdfs:subClassOf* shtl:GraphT }
+        } UNION {
+          ?e a shux:AttrRef ; shux:item ?ib ; shux:attr ?an .
+          $this shtl:onAlternative ?alt .
+          ?alt shtl:items/rdf:rest*/rdf:first ?item .
+          ?item shtl:bind ?ib ; shtl:calls ?prod .
+          ?prod shtl:syn ?ad .
+          ?ad shtl:name ?an ; shtl:type ?value .
+          FILTER NOT EXISTS { ?value rdfs:subClassOf* shtl:GraphT }
+        }
+      }
+    """ ;
+  ] .
+
+shsh:ConstraintShape
+  a sh:NodeShape ;
+  rdfs:label "constraint"@en ;
+  sh:targetClass shtl:Constraint ;
+  sh:property
+    [ sh:path shtl:onAlternative ; sh:minCount 1 ; sh:maxCount 1 ;
+      sh:message "Constraint: exactly one shtl:onAlternative." ] ,
+    [ sh:path shtl:test ; sh:minCount 1 ; sh:maxCount 1 ; sh:node shsh:ExprShape ;
+      sh:message "Constraint: exactly one boolean shtl:test expression." ] ,
+    [ sh:path shtl:errorCode ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ;
+      sh:message "Constraint: exactly one stable shtl:errorCode (the semantic-negative generator hook)." ] .
+
+# ============================================================================
+# 5. TERMINAL LAYER
+# ============================================================================
+
+shsh:TerminalShape
+  a sh:NodeShape ;
+  rdfs:label "terminal"@en ;
+  sh:targetClass shtl:Terminal ;
+  sh:property
+    [ sh:path shtl:pattern ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype shtl:regex ;
+      sh:message "Terminal: exactly one anchored shtl:pattern (shtl:regex literal) per closure — FunctionalGrammarProperty." ] ,
+    [ sh:path shtl:skip ; sh:maxCount 1 ; sh:datatype xsd:boolean ;
+      sh:message "Terminal: at most one shtl:skip boolean per closure (a module cannot flip an imported terminal's skip status)." ] ,
+    [ sh:path shtl:fragment ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ,
+    [ sh:path shtl:valueIso ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ,
+    [ sh:path shtl:unparseIso ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ,
+    [ sh:path shtl:extendsTerminal ; sh:nodeKind sh:IRI ;
+      sh:message "Terminal: shtl:extendsTerminal names terminal IRIs (lexical-conservativity obligation)." ] ,
+    [ sh:path shtl:reservedAgainst ; sh:nodeKind sh:IRI ] .
+
+shsh:IsoShape
+  a sh:NodeShape ;
+  rdfs:label "iso"@en ;
+  sh:targetClass shtl:Iso ;
+  sh:property
+    [ sh:path shtl:forwardFn ; sh:minCount 1 ; sh:maxCount 1 ;
+      sh:message "Iso: exactly one shtl:forwardFn." ] ,
+    [ sh:path shtl:backwardFn ; sh:minCount 1 ; sh:maxCount 1 ;
+      sh:message "Iso: exactly one shtl:backwardFn." ] ,
+    [ sh:path shtl:lossy ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "Iso: a lossy iso must declare a shtl:canonicalizer." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this WHERE {
+        $this shtl:lossy true .
+        FILTER NOT EXISTS { $this shtl:canonicalizer ?c }
+      }
+    """ ;
+  ] .
+
+# ============================================================================
+# 6. PRINT LAYER
+# ============================================================================
+
+shsh:PrintGuardShape
+  a sh:NodeShape ;
+  rdfs:label "print guard"@en ;
+  sh:targetClass shtl:PrintGuard ;
+  sh:nodeKind sh:IRI ;
+  sh:property [ sh:path shtl:requiresIndex ; sh:minCount 1 ; sh:nodeKind sh:IRI ;
+    sh:message "PrintGuard: every guard must declare at least one shtl:requiresIndex (decidability is declared, machine-audited data)." ] .
+
+shsh:PrintGuardUsageShape
+  a sh:NodeShape ;
+  rdfs:label "print guard usage"@en ;
+  sh:targetObjectsOf shtl:printGuard ;
+  sh:or (
+    [ sh:nodeKind sh:IRI ]                        # a guard-vocabulary IRI
+    [ sh:class shux:And ]
+    [ sh:class shux:Or ]
+    [ sh:class shux:Not ]
+  ) ;
+  sh:message "printGuard values must be guard IRIs or shux:And/Or/Not compositions thereof." .
+
+# GUARD-FREE FALLBACK (law L3, closure-level): any production one of whose
+# alternatives carries a printGuard must also have a guard-free alternative
+# in the closure (the imported lattice-bottom alternatives normally are it).
+shsh:GuardFreeFallbackShape
+  a sh:NodeShape ;
+  rdfs:label "guard-free fallback per prioritized group"@en ;
+  sh:targetClass shtl:Production ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "L3 violated in this closure: every prioritized group must end in a guard-free fallback alternative (pinned to the least module declaring the production; never excludable by profiles)." ;
+    sh:prefixes mod:shu-shapes ;
+    sh:select """
+      SELECT $this WHERE {
+        ?a1 shtl:alternativeOf $this .
+        ?a1 shtl:printGuard ?g1 .
+        FILTER NOT EXISTS {
+          ?a2 shtl:alternativeOf $this .
+          FILTER NOT EXISTS { ?a2 shtl:printGuard ?g2 }
+        }
+      }
+    """ ;
+  ] .
+
+# (PrintPolicy IRI discipline is covered by shsh:ExtensibleResourceIriShape;
+# the Q4 policy properties are free-form refinements — no arity shape.)
+
+# ============================================================================
+# 7. TEST LAYER
+# ============================================================================
+
+shsh:TestSuiteShape
+  a sh:NodeShape ;
+  rdfs:label "test suite"@en ;
+  sh:targetClass shtl:TestSuite ;
+  sh:property
+    [ sh:path shtl:suiteFor ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ,
+    [ sh:path shtl:resultLift ;
+      sh:node [
+        a sh:NodeShape ;
+        sh:property
+          [ sh:path shtl:onSuite ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ,
+          [ sh:path shtl:lift ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( shtl:IntoDefaultGraph ) ]
+      ] ;
+      sh:message "resultLift: [ shtl:onSuite <suite> ; shtl:lift shtl:IntoDefaultGraph ]." ] .
+
+shsh:TestShape
+  a sh:NodeShape ;
+  rdfs:label "test"@en ;
+  sh:targetClass shtl:Test ;
+  sh:property [ sh:path mf:action ; sh:minCount 1 ; sh:maxCount 1 ;
+    sh:message "Test: exactly one mf:action (W3C manifest vocabulary, reused verbatim)." ] .
+
+shsh:EvalTestShape
+  a sh:NodeShape ;
+  sh:targetClass shtl:EvalTest ;
+  sh:property [ sh:path mf:result ; sh:minCount 1 ; sh:maxCount 1 ;
+    sh:message "EvalTest: exactly one mf:result." ] .
+
+shsh:NegativeSyntaxTestShape
+  a sh:NodeShape ;
+  sh:targetClass shtl:NegativeSyntaxTest ;
+  sh:property
+    [ sh:path shtl:negativeScope ; sh:maxCount 1 ;
+      sh:in ( shtl:ThisLanguage shtl:Hereditary ) ;
+      sh:message "NegativeSyntaxTest: shtl:negativeScope is ThisLanguage (default) or Hereditary." ] ,
+    [ sh:path shtl:negativeFor ; sh:nodeKind sh:IRI ] .

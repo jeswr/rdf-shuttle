@@ -1,0 +1,1148 @@
+# ============================================================================
+# vocab/shuttle.ttl — the Shuttle v0.2 grammar vocabulary (shtl: ontology)
+#
+# Implements RFC 0001 (docs/rfc/0001-shuttle-v0.2-design.md): grammars ARE RDF
+# graphs; a Shuttle module is a named graph of shtl: triples; import is
+# named-graph union; extension is monotone triple-addition; grammar
+# well-formedness is SHACL conformance (vocab/shuttle-shapes.ttl).
+#
+# Prefix note: RFC 0001 writes this namespace with the prefix `shu:`; the
+# published preferred prefix is `shtl:`. Both name the SAME IRIs under
+# https://w3id.org/shuttle/vocab# — prefixes are cosmetic (RFC, "name
+# resolution"). The expression namespace is `shux:`.
+#
+# This ontology is ITSELF an importable Shuttle module (mod:shu-ontology).
+# When published in a dataset it lives in the named graph mod:shu-ontology;
+# this file is that graph, serialized as plain Turtle.
+# ============================================================================
+
+@prefix shtl:    <https://w3id.org/shuttle/vocab#> .
+@prefix shux:    <https://w3id.org/shuttle/expr#> .
+@prefix mod:     <https://w3id.org/shuttle/mod/> .
+@prefix rdf:     <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:     <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:     <http://www.w3.org/2001/XMLSchema#> .
+@prefix sh:      <http://www.w3.org/ns/shacl#> .
+@prefix rdft:    <http://www.w3.org/ns/rdftest#> .
+@prefix mf:      <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix vann:    <http://purl.org/vocab/vann/> .
+
+mod:shu-ontology
+  a owl:Ontology , shtl:Module ;
+  rdfs:label "Shuttle v0.2 grammar vocabulary"@en ;
+  rdfs:comment "RDFS/OWL vocabulary for Shuttle v0.2: declarative, pure attribute grammars as RDF. A grammar module is a named graph of these triples; shtl:imports is named-graph union; extension is monotone triple-addition; well-formedness is SHACL conformance against mod:shu-shapes."@en ;
+  shtl:specRef "RFC 0001 — Shuttle v0.2 design (rdf-shuttle docs/rfc/0001-shuttle-v0.2-design.md, 2026-07)" ;
+  vann:preferredNamespacePrefix "shtl" ;
+  vann:preferredNamespaceUri "https://w3id.org/shuttle/vocab#" ;
+  dcterms:license <https://opensource.org/licenses/MIT> ;
+  owl:versionInfo "0.2.0" .
+
+# ============================================================================
+# 0. REFLECTIVE LAYER — the vocabulary classifies its own predicates.
+#
+# shtl:MonotoneProperty: extension modules MAY add further values on resources
+# defined in imported graphs (extension = add a triple).
+# shtl:FunctionalGrammarProperty: at most ONE value per subject across the
+# whole pinned import closure; a second, differing assertion from another
+# module is a hard conflict, reported with BOTH named graphs (this is why
+# modules must be named graphs).
+# Pairwise-functional obligations that are not single-property-functional
+# (one equation per attribute occurrence, one synthesized type per
+# (production, attribute), one guard-free fallback per prioritized group) are
+# enforced by the SHACL shapes and the compiler, not by this classification.
+# ============================================================================
+
+shtl:MonotoneProperty
+  a rdfs:Class ;
+  rdfs:subClassOf rdf:Property ;
+  rdfs:label "monotone property"@en ;
+  rdfs:comment "A predicate whose value set is open across the import closure: any importing module may add triples with this predicate on resources defined elsewhere. Extension of a Shuttle grammar consists ONLY of adding triples with monotone predicates (plus new resources)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:FunctionalGrammarProperty
+  a rdfs:Class ;
+  rdfs:subClassOf rdf:Property ;
+  rdfs:label "functional grammar property"@en ;
+  rdfs:comment "A predicate with at most one value per subject across the pinned import closure. Conflicting assertions from two modules are a hard error reported with both graph names; a module can never displace an imported value."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+# ============================================================================
+# 1. MODULE LAYER
+# ============================================================================
+
+shtl:Module
+  a rdfs:Class , owl:Class ;
+  rdfs:label "module"@en ;
+  rdfs:comment "A Shuttle module: a NAMED GRAPH whose name is the module IRI, containing shtl: triples. Semantics of a module = the named-graph union of its transitive shtl:imports closure, compiled only against a hash-pinned lockfile (graph IRI → content hash) that closes RDF's open world into a sound compile unit. Extensible resources (productions, alternatives, templates, terminals, tests, policies, isos) MUST be IRI-identified; blank nodes are legal only for non-extensible internals (items, expressions, attribute declarations)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:imports
+  a rdf:Property , owl:ObjectProperty , shtl:MonotoneProperty ;
+  rdfs:subPropertyOf owl:imports ;
+  rdfs:label "imports"@en ;
+  rdfs:comment "Module import: the transitive closure is an acyclic DAG; import semantics is idempotent named-graph union (so diamonds, e.g. TriG over N-Triples via both Turtle and N-Quads, are free). Compilation is summary-based and incremental via each module's exported interface summary graph."@en ;
+  rdfs:domain shtl:Module ;
+  rdfs:range shtl:Module ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Profile
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Module ;
+  rdfs:label "profile"@en ;
+  rdfs:comment "A restriction module. Profiles may only REMOVE SUGAR: never a guard-free print fallback (so L(profile) ⊆ L(base) and print totality hold by construction), no dangling references, and profiles import only profiles (an extension cannot un-exclude). The only restriction mechanism in v0.2 — no override of any kind exists."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:profileOf
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "profile of"@en ;
+  rdfs:comment "The base module this profile restricts."@en ;
+  rdfs:domain shtl:Profile ;
+  rdfs:range shtl:Module ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:excludes
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "excludes"@en ;
+  rdfs:comment "Alternative or terminal IRIs removed by this profile. Checked closed: excluded IRIs must exist in the base closure; guard-free fallbacks are never excludable."@en ;
+  rdfs:domain shtl:Profile ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:includesOnly
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "includes only"@en ;
+  rdfs:comment "Whitelist form of profile restriction: the profile keeps only the listed alternatives/terminals (plus everything guard-free)."@en ;
+  rdfs:domain shtl:Profile ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:start
+  a rdf:Property , owl:ObjectProperty , shtl:FunctionalGrammarProperty ;
+  rdfs:label "start"@en ;
+  rdfs:comment "The start production of a syntax module."@en ;
+  rdfs:domain shtl:Module ;
+  rdfs:range shtl:Production ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:specRef
+  a rdf:Property , owl:DatatypeProperty , shtl:FunctionalGrammarProperty ;
+  rdfs:label "spec reference"@en ;
+  rdfs:comment "Mandatory pin of the exact specification document (and Working Draft date while RDF 1.2 is in flux) this module encodes. Every module carries one; spec pins are provenance."@en ;
+  rdfs:domain shtl:Module ;
+  rdfs:range xsd:string ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:EmitMultiplicity
+  a rdfs:Class , owl:Class ;
+  rdfs:label "emit multiplicity"@en ;
+  rdfs:comment "Whether a module's emitted graph is a set or a bag of triples or quads. Set semantics is normative for the graph-level round-trip laws; line-oriented profiles (N-Triples/N-Quads) may declare bag semantics to preserve multiplicity through a round-trip. Test-suite accretion across a set/bag edge applies direction-of-accretion coercion explicitly."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:TripleSet a shtl:EmitMultiplicity ; rdfs:label "triple set"@en ; rdfs:isDefinedBy mod:shu-ontology .
+shtl:QuadSet   a shtl:EmitMultiplicity ; rdfs:label "quad set"@en ; rdfs:isDefinedBy mod:shu-ontology .
+shtl:TripleBag a shtl:EmitMultiplicity ; rdfs:label "triple bag"@en ; rdfs:isDefinedBy mod:shu-ontology .
+shtl:QuadBag   a shtl:EmitMultiplicity ; rdfs:label "quad bag"@en ; rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:emits
+  a rdf:Property , owl:ObjectProperty , shtl:FunctionalGrammarProperty ;
+  rdfs:label "emits"@en ;
+  rdfs:comment "The emit multiplicity of the module's denotation (shtl:TripleSet default; shtl:QuadSet, shtl:TripleBag, shtl:QuadBag)."@en ;
+  rdfs:domain shtl:Module ;
+  rdfs:range shtl:EmitMultiplicity ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:chain
+  a rdf:Property , owl:ObjectProperty , shtl:MonotoneProperty ;
+  rdfs:label "chain"@en ;
+  rdfs:comment "Declares a chained attribute (an inherited/synthesized pair, e.g. env : Env) threaded through the module's statement spine by GENERATED Knuth copy rules — an absent equation means copy. Chain-FIELD widening with a default is monotone: imported equations never mention new fields, so they lift via copy rules unchanged, and the compiled env is a single record pointer (imported compiled code is ABI-stable)."@en ;
+  rdfs:domain shtl:Module ;
+  rdfs:range shtl:AttrDecl ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:nonConservative
+  a rdf:Property , owl:DatatypeProperty ;
+  rdfs:label "non-conservative"@en ;
+  rdfs:comment "Explicit flag acknowledging that a delta adds templates to alternatives reachable in the imported language (so imported (doc, expected) test pairs may no longer hold verbatim). Required whenever the reachability-based conservativity check fails."@en ;
+  rdfs:range xsd:boolean ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+# ============================================================================
+# 2. SYNTAX LAYER — productions, alternatives, items
+# ============================================================================
+
+shtl:Production
+  a rdfs:Class , owl:Class ;
+  rdfs:label "production"@en ;
+  rdfs:comment "An IRI-named nonterminal with a typed attribute signature: inherited attributes (shtl:inh), synthesized attributes (shtl:syn), an exported streaming contract (shtl:strictness), and an OPEN set of alternatives (whatever the import closure asserts via shtl:alternativeOf). Any production may synthesize any term-algebra subtype AND carry triple templates — value-plus-emissions is just syn typing plus template presence."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:AttrDecl
+  a rdfs:Class , owl:Class ;
+  rdfs:label "attribute declaration"@en ;
+  rdfs:comment "A typed attribute: shtl:name, shtl:type, optional shtl:default. Inherited attributes with defaults are monotonically addable (imported call sites lift via copy rules)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:inh
+  a rdf:Property , owl:ObjectProperty , shtl:MonotoneProperty ;
+  rdfs:label "inherited attribute"@en ;
+  rdfs:comment "An inherited attribute of the production. Adding an inherited attribute WITH a default is monotone."@en ;
+  rdfs:domain shtl:Production ;
+  rdfs:range shtl:AttrDecl ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:syn
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "synthesized attribute"@en ;
+  rdfs:comment "A synthesized attribute of the production. The synthesized TYPE per (production, attribute) is functional across the closure."@en ;
+  rdfs:domain shtl:Production ;
+  rdfs:range shtl:AttrDecl ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:name
+  a rdf:Property , owl:DatatypeProperty ;
+  rdfs:label "name"@en ;
+  rdfs:range xsd:string ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:type
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "type"@en ;
+  rdfs:comment "The attribute's type: a term-algebra type class (shtl:Term and subtypes), shtl:Env, a scalar type, or an option type node."@en ;
+  rdfs:domain shtl:AttrDecl ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:default
+  a rdf:Property ;
+  rdfs:label "default"@en ;
+  rdfs:comment "Default value expression for an attribute (constant RDF term or shux: expression). E.g. an inherited g : GraphT defaults to shtl:defaultGraph — declared at the lattice bottom, exploited two rungs up."@en ;
+  rdfs:domain shtl:AttrDecl ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+# --- strictness: the exported streaming contract ---------------------------
+
+shtl:StrictnessClass
+  a rdfs:Class , owl:Class ;
+  rdfs:label "strictness class"@en ;
+  rdfs:comment "The exported streaming contract of a production: when its synthesized value / emissions are available relative to its token consumption. A caller's schedule depends ONLY on callees' strictness classes, never their clause lists — so extension can never reschedule imported emission (contractual streaming stability). A delta whose new alternative binds the synthesized value later than the declared class is rejected AT THE DELTA."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Immediate
+  a shtl:StrictnessClass ;
+  rdfs:label "immediate"@en ;
+  rdfs:comment "Ground at clause selection (computable from lookahead, constants, Skolems, and inherited attributes at the callee's first token)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:AfterTokens
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:StrictnessClass ;
+  rdfs:label "after k tokens"@en ;
+  rdfs:comment "Ground after consuming shtl:k tokens. Used as a node: [ a shtl:AfterTokens ; shtl:k n ]."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:k
+  a rdf:Property , owl:DatatypeProperty ;
+  rdfs:label "k"@en ;
+  rdfs:range xsd:integer ;
+  rdfs:domain shtl:AfterTokens ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:AtEnd
+  a shtl:StrictnessClass ;
+  rdfs:label "at end"@en ;
+  rdfs:comment "Ground only when the production's derivation completes (e.g. tripleTerm)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:strictness
+  a rdf:Property , owl:ObjectProperty , shtl:FunctionalGrammarProperty ;
+  rdfs:label "strictness"@en ;
+  rdfs:range shtl:StrictnessClass ;
+  rdfs:domain shtl:Production ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:buffered
+  a rdf:Property , owl:DatatypeProperty , shtl:FunctionalGrammarProperty ;
+  rdfs:label "buffered"@en ;
+  rdfs:comment "Explicit, visible opt-out of the L-attributedness / streaming check for this production."@en ;
+  rdfs:domain shtl:Production ;
+  rdfs:range xsd:boolean ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+# --- alternatives -----------------------------------------------------------
+
+shtl:Alternative
+  a rdfs:Class , owl:Class ;
+  rdfs:label "alternative"@en ;
+  rdfs:comment "One IRI-named alternative of a production: an ordered syntax row (shtl:items — the ONE ordered thing, because concatenation is ordered) plus UNORDERED sets of equations, triple templates, constraints, and Skolem binders. Alternatives are order-independent and must be parse-disjoint under LL(k≤2) against the imported FIRST summaries."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:alternativeOf
+  a rdf:Property , owl:ObjectProperty , shtl:MonotoneProperty ;
+  rdfs:label "alternative of"@en ;
+  rdfs:comment "THE extension point: an OPEN predicate — a production's alternative set is whatever the pinned import closure asserts. Sound because alternatives are order-independent and LL-disjoint (checked per delta with counterexamples naming both alternative IRIs and their home graphs)."@en ;
+  rdfs:domain shtl:Alternative ;
+  rdfs:range shtl:Production ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:items
+  a rdf:Property , owl:ObjectProperty , shtl:FunctionalGrammarProperty ;
+  rdfs:label "items"@en ;
+  rdfs:comment "The CLOSED rdf:List of syntax items of this alternative — order lives here only. Deliberate ouroboros: this list uses the very rdf:first/rdf:rest cells the collection production defines."@en ;
+  rdfs:domain shtl:Alternative ;
+  rdfs:range rdf:List ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+# --- items ------------------------------------------------------------------
+
+shtl:Item
+  a rdfs:Class , owl:Class ;
+  rdfs:label "item"@en ;
+  rdfs:comment "Abstract member of a syntax row. Items are non-extensible internals: blank nodes are legal here."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Lit
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Item ;
+  rdfs:label "literal item"@en ;
+  rdfs:comment "A quoted terminal: [ a shtl:Lit ; shtl:text \"<<(\" ]."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:text
+  a rdf:Property , owl:DatatypeProperty ;
+  rdfs:label "text"@en ;
+  rdfs:domain shtl:Lit ;
+  rdfs:range xsd:string ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:TerminalRef
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Item ;
+  rdfs:label "terminal reference"@en ;
+  rdfs:comment "Reference to a named terminal: [ a shtl:TerminalRef ; shtl:terminal nt:IRIREF ; shtl:bind \"i\" ]."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:terminal
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "terminal"@en ;
+  rdfs:domain shtl:TerminalRef ;
+  rdfs:range shtl:Terminal ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:NonterminalRef
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Item ;
+  rdfs:label "nonterminal reference"@en ;
+  rdfs:comment "A call: [ a shtl:NonterminalRef ; shtl:calls nt:object ; shtl:args (…) ; shtl:bind \"o\" ]. Arguments not passed explicitly auto-copy from the caller when names and types match (the attribute-grammar copy-rule convention)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:calls
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "calls"@en ;
+  rdfs:domain shtl:NonterminalRef ;
+  rdfs:range shtl:Production ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:args
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "arguments"@en ;
+  rdfs:comment "Closed rdf:List of expressions supplying the callee's inherited attributes, in shtl:inh declaration order. Expressions may reference only items strictly to the LEFT of this call (L-attributedness — SHACL-checked)."@en ;
+  rdfs:domain shtl:NonterminalRef ;
+  rdfs:range rdf:List ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:bind
+  a rdf:Property , owl:DatatypeProperty ;
+  rdfs:label "bind"@en ;
+  rdfs:comment "The occurrence name this item's value is bound to, referenced by shux:AttrRef nodes."@en ;
+  rdfs:domain shtl:Item ;
+  rdfs:range xsd:string ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Opt
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Item ;
+  rdfs:label "optional"@en ;
+  rdfs:comment "E? — NORMATIVE desugaring into a fresh two-alternative production over shtl:of; the value is an option."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Star
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Item ;
+  rdfs:label "zero or more"@en ;
+  rdfs:comment "E* — NORMATIVE desugaring into a fresh right-recursive chain production over shtl:of. Repetition-with-state is the `fold` sugar, likewise macro-defined."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Plus
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Item ;
+  rdfs:label "one or more"@en ;
+  rdfs:comment "E+ — NORMATIVE desugaring: one shtl:of then the Star chain."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:SepList
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Item ;
+  rdfs:label "separated list"@en ;
+  rdfs:comment "( E ) % sep — one-or-more shtl:of separated by shtl:sep; NORMATIVE desugaring into the obvious right-recursive chain."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:of
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "of"@en ;
+  rdfs:comment "The repeated/optional item of an Opt/Star/Plus/SepList."@en ;
+  rdfs:range shtl:Item ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:sep
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "separator"@en ;
+  rdfs:domain shtl:SepList ;
+  rdfs:range shtl:Item ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+# ============================================================================
+# 3. SEMANTIC LAYER — equations, triple templates, constraints, binders
+#
+# Four order-free categories replace v0.1's ordered semantic blocks and seven
+# verbs: equations (value/let/envOut), templates (emit + when), constraints
+# (require), Skolem binders (fresh). The meaning of a document is the unique
+# solution of the equation system on its LL-deterministic parse tree; the
+# emitted graph is the set union of template instances over the tree.
+# ============================================================================
+
+shtl:Equation
+  a rdfs:Class , owl:Class ;
+  rdfs:label "equation"@en ;
+  rdfs:comment "A pure attribute equation: shtl:target (an occurrence or an own attribute name), shtl:expr, optional shtl:otherwise (total default over option types, replacing v0.1's `e ?? d`). One equation per defined attribute occurrence, statically acyclic and single-assignment. ABSENT equation = Knuth copy rule — this convention is what makes attribute-row extension free."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:eq
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "equation (attachment)"@en ;
+  rdfs:comment "Convenience attachment of an equation to its alternative (inline blank-node form); x shtl:eq y holds iff y shtl:onAlternative x for equations. Cross-module attachment uses shtl:onAlternative."@en ;
+  rdfs:domain shtl:Alternative ;
+  rdfs:range shtl:Equation ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:let
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "let binding"@en ;
+  rdfs:comment "A named pure local binding on an alternative; a binding whose expression is a shux:Skolem node is a FRESH BINDER (v0.1's `fresh`), denoting bnodeAt(derivation-path, k) — deterministic _:b0, _:b1 … labels are recovered because document-order enumeration of Skolem positions is a bijection."@en ;
+  rdfs:domain shtl:Alternative ;
+  rdfs:range shtl:LetBinding ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:LetBinding
+  a rdfs:Class , owl:Class ;
+  rdfs:label "let binding"@en ;
+  rdfs:comment "shtl:name plus shtl:expr. Non-extensible internal (blank nodes legal)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:onAlternative
+  a rdf:Property , owl:ObjectProperty , shtl:MonotoneProperty ;
+  rdfs:label "on alternative"@en ;
+  rdfs:comment "Attaches an equation, triple template, or constraint to an alternative. OPEN — but templates may only be added to a module's OWN alternatives, or to imported alternatives unreachable in the imported language (else the explicit shtl:nonConservative flag is required)."@en ;
+  rdfs:range shtl:Alternative ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:target
+  a rdf:Property ;
+  rdfs:label "target"@en ;
+  rdfs:comment "The defined attribute occurrence: either a plain string (the production's own synthesized attribute name) or an shtl:Occurrence node (shtl:ofItem + shtl:attr, for a callee's inherited attribute)."@en ;
+  rdfs:domain shtl:Equation ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Occurrence
+  a rdfs:Class , owl:Class ;
+  rdfs:label "attribute occurrence"@en ;
+  rdfs:comment "An (item, attribute) pair naming an inherited attribute occurrence of a called item."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:ofItem
+  a rdf:Property , owl:DatatypeProperty ;
+  rdfs:label "of item"@en ;
+  rdfs:comment "The shtl:bind name of the item whose attribute this occurrence names."@en ;
+  rdfs:domain shtl:Occurrence ;
+  rdfs:range xsd:string ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:attr
+  a rdf:Property , owl:DatatypeProperty ;
+  rdfs:label "attribute"@en ;
+  rdfs:domain shtl:Occurrence ;
+  rdfs:range xsd:string ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:expr
+  a rdf:Property ;
+  rdfs:label "expression"@en ;
+  rdfs:comment "A pure term expression: a constant RDF term (vocabulary constants appear AS THEMSELVES — rdf:first in a template is the IRI rdf:first) or a shux: expression node."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:otherwise
+  a rdf:Property ;
+  rdfs:label "otherwise"@en ;
+  rdfs:comment "Total default over option types (v0.1's `e ?? d`, made an ordinary total equation)."@en ;
+  rdfs:domain shtl:Equation ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:TripleTemplate
+  a rdfs:Class , owl:Class ;
+  rdfs:label "triple template"@en ;
+  rdfs:comment "A declarative emission ⟨s,p,o[,g][,when]⟩ with SPARQL-CONSTRUCT semantics; the emitted graph is the set union of template instances over the parse tree. Parse mode: instantiate at the earliest groundness point (derived, not authored). Print mode: consume exactly one matching quad from the residual (v0.1 §7 semantics, unchanged). Templates are extensible resources: IRI-identified."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:s
+  a rdf:Property ;
+  rdfs:label "subject"@en ;
+  rdfs:comment "Subject position: expression of type ⊑ shtl:SubjT (positionally typed — SHACL-checked on the grammar graph itself)."@en ;
+  rdfs:domain shtl:TripleTemplate ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:p
+  a rdf:Property ;
+  rdfs:label "predicate"@en ;
+  rdfs:comment "Predicate position: expression of type ⊑ shtl:Iri."@en ;
+  rdfs:domain shtl:TripleTemplate ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:o
+  a rdf:Property ;
+  rdfs:label "object"@en ;
+  rdfs:comment "Object position: expression of type ⊑ shtl:Term. This is the ONLY position admitting shtl:TripleTermT — object-only nesting of RDF 1.2 triple terms is a subtype fact."@en ;
+  rdfs:domain shtl:TripleTemplate ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:g
+  a rdf:Property ;
+  rdfs:label "graph"@en ;
+  rdfs:comment "Graph position: expression of type ⊑ shtl:GraphT; defaults to the inherited g attribute (itself defaulting to shtl:defaultGraph at the lattice bottom). Module-closed constant folding removes the slot from artifacts whose closure never binds it."@en ;
+  rdfs:domain shtl:TripleTemplate ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:when
+  a rdf:Property ;
+  rdfs:label "when"@en ;
+  rdfs:comment "Boolean guard expression; parse mode instantiates the template only when it holds, print mode inverts it by clause solving."@en ;
+  rdfs:domain shtl:TripleTemplate ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Constraint
+  a rdfs:Class , owl:Class ;
+  rdfs:label "constraint"@en ;
+  rdfs:comment "A well-formedness requirement (v0.1's `require c else error E`): shtl:test (boolean expression) and shtl:errorCode (stable code; doubles as the semantic-negative-test generator hook). Emptiness of the auto-unioned diagnostics attribute defines validity."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:test
+  a rdf:Property ;
+  rdfs:label "test"@en ;
+  rdfs:domain shtl:Constraint ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:errorCode
+  a rdf:Property , owl:DatatypeProperty ;
+  rdfs:label "error code"@en ;
+  rdfs:domain shtl:Constraint ;
+  rdfs:range xsd:string ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Oracle
+  a rdfs:Class , owl:Class ;
+  rdfs:label "oracle"@en ;
+  rdfs:comment "A declared pure decidable predicate (v0.1's @oracle), IRI-identified; usable in shtl:when / shtl:test expressions. Backward (print) reading is discharged from the consumed quad's shape."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+# ============================================================================
+# 4. TERM ALGEBRA TYPES (populated by mod:rdf-terms; RDF 1.2 positional)
+#
+# The subtype lattice is first-class RDF: SHACL positional typing over these
+# rdfs:subClassOf triples rejects misuse at the grammar graph, before
+# compilation. TripleTermT ⊑ Term but ⋢ SubjT (disjoint) — RDF 1.2 triple
+# terms nest via the object position only, as a subtype fact.
+# ============================================================================
+
+shtl:Term
+  a rdfs:Class , owl:Class ;
+  rdfs:label "term"@en ;
+  rdfs:comment "Any RDF 1.2 term: IRI, blank node, literal (incl. dir-lang), or triple term."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:SubjT
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Term ;
+  owl:disjointWith shtl:TripleTermT ;
+  rdfs:label "subject term"@en ;
+  rdfs:comment "IRI or blank node — the only types admissible in subject position."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Iri
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:SubjT , shtl:GraphT ;
+  rdfs:label "IRI"@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:BnodeT
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:SubjT , shtl:GraphT ;
+  rdfs:label "blank node"@en ;
+  rdfs:comment "Blank nodes are DENOTED, never allocated imperatively: _:x is the pure term skolem(scope, \"x\") over an inherited scope attribute; []/fresh sites are shux:Skolem nodes."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:LiteralT
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Term ;
+  rdfs:label "literal"@en ;
+  rdfs:comment "Lexical forms are preserved verbatim (lexical fidelity). Constructor invariants make ill-formed RDF 1.2 literals unrepresentable: lang without dir forces rdf:langString; lang plus dir forces rdf:dirLangString; \"x\"@en^^dt stays unlexable by clause shape."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:TripleTermT
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Term ;
+  rdfs:label "triple term"@en ;
+  rdfs:comment "RDF 1.2 triple term: ⊑ Term, disjoint with SubjT — hence object-position-only by typing. The tripleTerm production is PURE (no template — the inner triple is not asserted)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:GraphT
+  a rdfs:Class , owl:Class ;
+  rdfs:label "graph term"@en ;
+  rdfs:comment "Graph position: default graph, IRI, blank node, or (N3) formula. The n3-terms module adds FormulaT ⊑ GraphT."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:defaultGraph
+  a shtl:GraphT ;
+  rdfs:label "default graph"@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Env
+  a rdfs:Class , owl:Class ;
+  rdfs:label "environment"@en ;
+  rdfs:comment "A chained record type (prefixes, base, …); compiles to a single in-place record when single-threaded (the compiler INTRODUCES the mutation v0.1 made authors write)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:StringT a rdfs:Class , owl:Class ; rdfs:label "string"@en ; rdfs:isDefinedBy mod:shu-ontology .
+shtl:BoolT   a rdfs:Class , owl:Class ; rdfs:label "boolean"@en ; rdfs:isDefinedBy mod:shu-ontology .
+shtl:IntT    a rdfs:Class , owl:Class ; rdfs:label "integer"@en ; rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:DirT
+  a rdfs:Class , owl:Class ;
+  rdfs:label "base direction"@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:ltr a shtl:DirT ; rdfs:label "ltr"@en ; rdfs:isDefinedBy mod:shu-ontology .
+shtl:rtl a shtl:DirT ; rdfs:label "rtl"@en ; rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Option
+  a rdfs:Class , owl:Class ;
+  rdfs:label "option type"@en ;
+  rdfs:comment "An option over shtl:of-typed values: [ a shtl:Option ; shtl:of shtl:SubjT ]. Totalized by shtl:otherwise; constructors shux:some / shux:none."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+# ============================================================================
+# 5. EXPRESSION VOCABULARY (shux:) — pure term expressions
+# ============================================================================
+
+shux:Expr
+  a rdfs:Class , owl:Class ;
+  rdfs:label "expression"@en ;
+  rdfs:comment "A pure term expression node. Non-extensible internal: blank nodes legal. Constants are not wrapped — an RDF term in expression position denotes itself."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:App
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shux:Expr ;
+  rdfs:label "application"@en ;
+  rdfs:comment "[ a shux:App ; shux:fn f ; shux:args (…) ] — application of a declared pure function/constructor to a closed argument list."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:fn
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "function"@en ;
+  rdfs:domain shux:App ;
+  rdfs:range shux:Fn ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:args
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "arguments"@en ;
+  rdfs:domain shux:App ;
+  rdfs:range rdf:List ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:AttrRef
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shux:Expr ;
+  rdfs:label "attribute reference"@en ;
+  rdfs:comment "[ a shux:AttrRef ; shux:item \"o\" ; shux:attr \"value\" ] — the named attribute of the item bound \"o\"; with shux:item absent, an attribute of the enclosing production itself (e.g. the inherited g)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:item
+  a rdf:Property , owl:DatatypeProperty ;
+  rdfs:label "item"@en ;
+  rdfs:domain shux:AttrRef ;
+  rdfs:range xsd:string ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:attr
+  a rdf:Property , owl:DatatypeProperty ;
+  rdfs:label "attribute"@en ;
+  rdfs:domain shux:AttrRef ;
+  rdfs:range xsd:string ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:VarRef
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shux:Expr ;
+  rdfs:label "variable reference"@en ;
+  rdfs:comment "[ a shux:VarRef ; shux:name \"cell\" ] — reference to a shtl:let binding of the same alternative."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:name
+  a rdf:Property , owl:DatatypeProperty ;
+  rdfs:label "name"@en ;
+  rdfs:domain shux:VarRef ;
+  rdfs:range xsd:string ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:Case
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shux:Expr ;
+  rdfs:label "case"@en ;
+  rdfs:comment "Total case analysis over a scrutinee (shux:of) with (shux:when, shux:then) branches and shux:else."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:of   a rdf:Property ; rdfs:label "scrutinee"@en ; rdfs:domain shux:Case ; rdfs:isDefinedBy mod:shu-ontology .
+shux:when a rdf:Property ; rdfs:label "when"@en ; rdfs:isDefinedBy mod:shu-ontology .
+shux:then a rdf:Property ; rdfs:label "then"@en ; rdfs:isDefinedBy mod:shu-ontology .
+shux:else a rdf:Property ; rdfs:label "else"@en ; rdfs:domain shux:Case ; rdfs:isDefinedBy mod:shu-ontology .
+
+shux:Skolem
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shux:Expr ;
+  rdfs:label "Skolem"@en ;
+  rdfs:comment "Explicit fresh-blank-node binder denoting bnodeAt(derivation-path, k) — an EXPLICIT expression node, never a bare blank node in the grammar graph (avoiding the template-existential vs structural-rdf:List ambiguity). Linear in print mode: matched by exactly one site. The compiler fuses Skolems back into a counter — v0.1's fresh, now a correct implementation of a pure semantics. Structurally, a Skolem node appears only as the shtl:expr of a let binding (SHACL-checked)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:And a rdfs:Class , owl:Class ; rdfs:subClassOf shux:Expr ; rdfs:label "and"@en ; rdfs:comment "Boolean conjunction of guard expressions (shux:args)."@en ; rdfs:isDefinedBy mod:shu-ontology .
+shux:Or  a rdfs:Class , owl:Class ; rdfs:subClassOf shux:Expr ; rdfs:label "or"@en ; rdfs:isDefinedBy mod:shu-ontology .
+shux:Not a rdfs:Class , owl:Class ; rdfs:subClassOf shux:Expr ; rdfs:label "not"@en ; rdfs:isDefinedBy mod:shu-ontology .
+
+# --- declared pure functions and term constructors --------------------------
+
+shux:Fn
+  a rdfs:Class , owl:Class ;
+  rdfs:label "pure function"@en ;
+  rdfs:comment "A declared pure function usable in shux:App, with signature triples shtl:sig (closed rdf:List of argument types) and shtl:returns. The audited primitive-iso library (resolve/relativize, expandPName/abbreviate, escape/unescape, langCanon) is IRI-identified in mod:rdf-terms as instances of this class."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:Constructor
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shux:Fn ;
+  rdfs:label "term constructor"@en ;
+  rdfs:comment "A constructor of the RDF term algebra. Deltas may only ADD constructors (monotone), so RDF 1.1 modules compile unchanged against RDF 1.2 closures."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:sig
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "signature"@en ;
+  rdfs:comment "Closed rdf:List of argument types."@en ;
+  rdfs:domain shux:Fn ;
+  rdfs:range rdf:List ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:returns
+  a rdf:Property , owl:ObjectProperty , shtl:FunctionalGrammarProperty ;
+  rdfs:label "returns"@en ;
+  rdfs:domain shux:Fn ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:iri
+  a shux:Constructor ;
+  rdfs:label "iri"@en ;
+  shtl:sig ( shtl:StringT ) ;
+  shtl:returns shtl:Iri ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:literal
+  a shux:Constructor ;
+  rdfs:label "literal"@en ;
+  rdfs:comment "literal(lex, dt) — lexical form preserved verbatim."@en ;
+  shtl:sig ( shtl:StringT shtl:Iri ) ;
+  shtl:returns shtl:LiteralT ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:langLiteral
+  a shux:Constructor ;
+  rdfs:label "language-tagged literal"@en ;
+  rdfs:comment "langLiteral(lex, lang) — datatype forced to rdf:langString by construction."@en ;
+  shtl:sig ( shtl:StringT shtl:StringT ) ;
+  shtl:returns shtl:LiteralT ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:dirLangLiteral
+  a shux:Constructor ;
+  rdfs:label "directional language-tagged literal"@en ;
+  rdfs:comment "dirLangLiteral(lex, lang, dir) — RDF 1.2; datatype forced to rdf:dirLangString by construction. Introduced to grammars by mod:rdf12-terms."@en ;
+  shtl:sig ( shtl:StringT shtl:StringT shtl:DirT ) ;
+  shtl:returns shtl:LiteralT ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:tt
+  a shux:Constructor ;
+  rdfs:label "triple term"@en ;
+  rdfs:comment "tt(s, p, o) — RDF 1.2 triple term. Returns TripleTermT ⊑ Term, ⋢ SubjT: object-only nesting is SHACL-checked on the grammar graph itself. A reified triple (<< s p o ~r >>) is NOT a constructor: it denotes its reifier subject and emits one ⟨r, rdf:reifies, tt(s,p,o)⟩ template."@en ;
+  shtl:sig ( shtl:SubjT shtl:Iri shtl:Term ) ;
+  shtl:returns shtl:TripleTermT ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:some a shux:Constructor ; rdfs:label "some"@en ; rdfs:isDefinedBy mod:shu-ontology .
+shux:none a shux:Constructor ; rdfs:label "none"@en ; rdfs:isDefinedBy mod:shu-ontology .
+
+shux:bind
+  a shux:Fn ;
+  rdfs:label "bind"@en ;
+  rdfs:comment "bind(map, key, value) — pure finite-map update; the whole of @prefix is one env equation: envOut = env{prefixes ↦ bind(env.prefixes, ns, resolve(env.base, i))}."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:resolve
+  a shux:Fn ;
+  rdfs:label "resolve"@en ;
+  rdfs:comment "RFC 3986 reference resolution — a primitive iso (with relativize as its backward reading), audited in mod:rdf-terms."@en ;
+  shtl:sig ( shtl:Iri shtl:StringT ) ;
+  shtl:returns shtl:Iri ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:update
+  a shux:Fn ;
+  rdfs:label "record update"@en ;
+  rdfs:comment "update(record, field, value) — pure record update, the form of every env equation."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shux:skolem
+  a shux:Fn ;
+  rdfs:label "skolem"@en ;
+  rdfs:comment "skolem(scope, label) — the denotation of a labelled blank node _:label over the inherited scope attribute (constant doc scope for Turtle; the formula's own Skolem for N3, where push/pop becomes one parameter equation). Replaces v0.1's label table."@en ;
+  shtl:returns shtl:BnodeT ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+# ============================================================================
+# 6. TERMINAL LAYER — shared lexical modules
+# ============================================================================
+
+shtl:regex
+  a rdfs:Datatype ;
+  rdfs:label "anchored regular expression"@en ;
+  rdfs:comment "Lexical space: anchored regular expressions (strictly regular — no backreferences, no lookaround). Terminals may additionally carry an audited structured form via shtl:structuredPattern."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Terminal
+  a rdfs:Class , owl:Class ;
+  rdfs:label "terminal"@en ;
+  rdfs:comment "An IRI-named token rule with an anchored-regex pattern and value/unparse isos. The merged closure's token automaton is a suspendable longest-match DFA; added terminals must pass lexical conservativity (tokenize the imported token language identically)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:pattern
+  a rdf:Property , owl:DatatypeProperty , shtl:FunctionalGrammarProperty ;
+  rdfs:label "pattern"@en ;
+  rdfs:comment "The anchored regex, as a shtl:regex literal. Functional: exactly one per terminal per closure."@en ;
+  rdfs:domain shtl:Terminal ;
+  rdfs:range shtl:regex ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:structuredPattern
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "structured pattern"@en ;
+  rdfs:comment "Optional structured (RDF-tree) form of the pattern, for auditing; when present it must denote the same language as shtl:pattern."@en ;
+  rdfs:domain shtl:Terminal ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:fragment
+  a rdf:Property , owl:DatatypeProperty ;
+  rdfs:label "fragment"@en ;
+  rdfs:comment "True for helper rules referenced only from other patterns; fragments never produce tokens."@en ;
+  rdfs:domain shtl:Terminal ;
+  rdfs:range xsd:boolean ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:skip
+  a rdf:Property , owl:DatatypeProperty , shtl:FunctionalGrammarProperty ;
+  rdfs:label "skip"@en ;
+  rdfs:comment "Skip-token designation as ordinary module data (resolves v0.1 NOTE 1): declared once on WS/COMMENT at the lattice bottom, unioned up by import. Per terminal it is functional — a module cannot flip an imported terminal's skip status."@en ;
+  rdfs:domain shtl:Terminal ;
+  rdfs:range xsd:boolean ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Iso
+  a rdfs:Class , owl:Class ;
+  rdfs:label "iso"@en ;
+  rdfs:comment "An IRI-identified value transducer pair from the audited primitive-iso library (mod:rdf-terms): fwd ∘ bwd = id on the print domain, property-tested plus differentially tested before a release may serve as a conformance oracle."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:valueIso
+  a rdf:Property , owl:ObjectProperty , shtl:FunctionalGrammarProperty ;
+  rdfs:label "value iso"@en ;
+  rdfs:comment "Token → value direction of the terminal's transducer."@en ;
+  rdfs:domain shtl:Terminal ;
+  rdfs:range shtl:Iso ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:unparseIso
+  a rdf:Property , owl:ObjectProperty , shtl:FunctionalGrammarProperty ;
+  rdfs:label "unparse iso"@en ;
+  rdfs:comment "Value → token direction; usually the backward reading of shtl:valueIso."@en ;
+  rdfs:domain shtl:Terminal ;
+  rdfs:range shtl:Iso ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:forwardFn
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "forward function"@en ;
+  rdfs:domain shtl:Iso ;
+  rdfs:range shux:Fn ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:backwardFn
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "backward function"@en ;
+  rdfs:domain shtl:Iso ;
+  rdfs:range shux:Fn ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:lossy
+  a rdf:Property , owl:DatatypeProperty ;
+  rdfs:label "lossy"@en ;
+  rdfs:comment "Non-injective transducers must be declared lossy WITH a canonicalizer."@en ;
+  rdfs:domain shtl:Iso ;
+  rdfs:range xsd:boolean ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:canonicalizer
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "canonicalizer"@en ;
+  rdfs:domain shtl:Iso ;
+  rdfs:range shux:Fn ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:extendsTerminal
+  a rdf:Property , owl:ObjectProperty , shtl:MonotoneProperty ;
+  rdfs:label "extends terminal"@en ;
+  rdfs:comment "Declared language-superset obligation between terminals (e.g. LANG_DIR ⊒ LANGTAG), checked by lexical conservativity on the merged token DFA."@en ;
+  rdfs:domain shtl:Terminal ;
+  rdfs:range shtl:Terminal ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:reservedAgainst
+  a rdf:Property , owl:ObjectProperty , shtl:MonotoneProperty ;
+  rdfs:label "reserved against"@en ;
+  rdfs:comment "Longest-match / reservation tie-breaks between terminals, as queryable triples (e.g. '@prefix' vs LANGTAG)."@en ;
+  rdfs:domain shtl:Terminal ;
+  rdfs:range shtl:Terminal ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+# ============================================================================
+# 7. PRINT LAYER — guards, preferences, policies
+#
+# Print rules ride on alternatives: importing the grammar imports the printer.
+# The lattice IS the L3 fallback chain — imported N-Triples alternatives are
+# the guard-free fallbacks of every superset, so serializer sharing is free
+# and profile restriction keeps print total by construction.
+# ============================================================================
+
+shtl:prefer
+  a rdf:Property , owl:DatatypeProperty , shtl:MonotoneProperty ;
+  rdfs:label "prefer"@en ;
+  rdfs:comment "Print priority of an alternative within its production's prioritized group (lower prints first). Prefer-ranked candidates are monotonically addable; prefer TIES across import diamonds are a hard conflict resolved explicitly — never silently (ties affect prettiness only)."@en ;
+  rdfs:domain shtl:Alternative ;
+  rdfs:range xsd:decimal ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:PrintGuard
+  a rdfs:Class , owl:Class ;
+  rdfs:label "print guard"@en ;
+  rdfs:comment "A CLOSED, IRI-identified guard vocabulary (resolves v0.1 NOTE 4): each guard declares shtl:requiresIndex naming the residual/window index that decides it, so decidability is declared and machine-audited, and the generator computes exactly the indexes the closure's guards demand. Extensions may mint new guard IRIs with declared index needs (monotone, summary-graph-visible)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:printGuard
+  a rdf:Property , owl:ObjectProperty , shtl:MonotoneProperty ;
+  rdfs:label "print guard"@en ;
+  rdfs:comment "Guard on a sugar alternative: a shtl:PrintGuard IRI or an shux:And/Or/Not composition thereof. Every prioritized group must end in a guard-free fallback (law L3), pinned to the LEAST module declaring the production."@en ;
+  rdfs:domain shtl:Alternative ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:DerivedIndex
+  a rdfs:Class , owl:Class ;
+  rdfs:label "derived index"@en ;
+  rdfs:comment "A residual-store or window index a guard may consult; the compiler derives exactly which indexes the closure's guards need and emits that as the store interface."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:spoIndex             a shtl:DerivedIndex ; rdfs:label "s-p-o match index"@en ; rdfs:isDefinedBy mod:shu-ontology .
+shtl:objectIncidenceIndex a shtl:DerivedIndex ; rdfs:label "object incidence count index"@en ; rdfs:isDefinedBy mod:shu-ontology .
+shtl:subjectWindowIndex   a shtl:DerivedIndex ; rdfs:label "subject window index"@en ; rdfs:comment "The only index available to the stream-pretty printer (window = subject); missing non-local evidence falls back to L3."@en ; rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:requiresIndex
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "requires index"@en ;
+  rdfs:domain shtl:PrintGuard ;
+  rdfs:range shtl:DerivedIndex ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+# The closed core guard vocabulary (home module: mod:print-core).
+shtl:listShaped
+  a shtl:PrintGuard ;
+  rdfs:label "list shaped"@en ;
+  rdfs:comment "The goal node roots a well-formed, unshared, acyclic rdf:first/rdf:rest chain."@en ;
+  shtl:requiresIndex shtl:spoIndex , shtl:objectIncidenceIndex ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:freshSingleUse
+  a shtl:PrintGuard ;
+  rdfs:comment "The blank node is used exactly once as an object (printable as [] / a blank-node property list)."@en ;
+  rdfs:label "fresh single use"@en ;
+  shtl:requiresIndex shtl:objectIncidenceIndex ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:reifiesQuadPresent
+  a shtl:PrintGuard ;
+  rdfs:label "reifies quad present"@en ;
+  rdfs:comment "A ?r rdf:reifies tt(s,p,o) quad for the candidate annotation is present in the residual."@en ;
+  shtl:requiresIndex shtl:spoIndex ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:needsLongQuoting
+  a shtl:PrintGuard ;
+  rdfs:label "needs long quoting"@en ;
+  rdfs:comment "The literal's lexical form requires the long (triple-quoted) string form."@en ;
+  shtl:requiresIndex shtl:subjectWindowIndex ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:abbreviable
+  a shtl:PrintGuard ;
+  rdfs:label "abbreviable"@en ;
+  rdfs:comment "The term is in the iso's print domain (e.g. an IRI abbreviates under the mined prefixes; a decimal literal is in the DECIMAL token language). Inferred guards from iso domains land here."@en ;
+  shtl:requiresIndex shtl:subjectWindowIndex ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:PrintPolicy
+  a rdfs:Class , owl:Class ;
+  rdfs:label "print policy"@en ;
+  rdfs:comment "A policy module refines, never redefines: the fixed declarative Q4 vocabulary as properties. Policies are modules (pretty-policy refines canonical-policy)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:orderBy            a rdf:Property ; rdfs:label "order by"@en ; rdfs:domain shtl:PrintPolicy ; rdfs:isDefinedBy mod:shu-ontology .
+shtl:groupBySubject     a rdf:Property , owl:DatatypeProperty ; rdfs:label "group by subject"@en ; rdfs:domain shtl:PrintPolicy ; rdfs:range xsd:boolean ; rdfs:isDefinedBy mod:shu-ontology .
+shtl:prefixMining       a rdf:Property ; rdfs:label "prefix mining"@en ; rdfs:domain shtl:PrintPolicy ; rdfs:isDefinedBy mod:shu-ontology .
+shtl:directivePlacement a rdf:Property ; rdfs:label "directive placement"@en ; rdfs:domain shtl:PrintPolicy ; rdfs:isDefinedBy mod:shu-ontology .
+shtl:layout             a rdf:Property ; rdfs:label "layout"@en ; rdfs:domain shtl:PrintPolicy ; rdfs:isDefinedBy mod:shu-ontology .
+
+# ============================================================================
+# 8. TEST LAYER — suites are modules; tests accrete up the lattice
+# ============================================================================
+
+shtl:TestSuite
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Module ;
+  rdfs:label "test suite"@en ;
+  rdfs:comment "Suites are modules: Suite(M) = the tests of the import closure. Every imported (document, expected) pair runs verbatim against the extending syntax because extension is conservative (checked by grammar reachability; violations require an explicit shtl:nonConservative flag). W3C manifests import directly — mf:action / mf:result are reused verbatim."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:suiteFor
+  a rdf:Property , owl:ObjectProperty , shtl:MonotoneProperty ;
+  rdfs:label "suite for"@en ;
+  rdfs:comment "The syntax module this suite exercises."@en ;
+  rdfs:domain shtl:TestSuite ;
+  rdfs:range shtl:Module ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Test
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf rdft:Test ;
+  rdfs:label "test"@en ;
+  rdfs:comment "A Shuttle conformance test. Instances are ADDITIONALLY typed with the concrete W3C rdft: class for their syntax (e.g. `t:eval-16 a shtl:EvalTest , rdft:TestTurtleEval`), so existing rdf-tests harnesses consume the manifests unchanged."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:EvalTest
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Test ;
+  rdfs:label "eval test"@en ;
+  rdfs:comment "mf:action document must parse to the mf:result graph (isomorphism; automorphism-free generated graphs keep the check linear)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:PositiveSyntaxTest
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Test ;
+  rdfs:label "positive syntax test"@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:NegativeSyntaxTest
+  a rdfs:Class , owl:Class ;
+  rdfs:subClassOf shtl:Test ;
+  rdfs:label "negative syntax test"@en ;
+  rdfs:comment "Provably-negative: LL-table mutants (single-token corruptions provably outside the language) and semantic negatives generated per shtl:errorCode."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:NegativeScope
+  a rdfs:Class , owl:Class ;
+  rdfs:label "negative scope"@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:ThisLanguage
+  a shtl:NegativeScope ;
+  rdfs:label "this language"@en ;
+  rdfs:comment "Default: the negative holds for this module's language only; it accretes DOWN profile edges, and is mechanically re-decided by LL-table membership in each superset, then re-tagged via shtl:negativeFor (trailing-dot-in-PN_LOCAL flips at Turtle; unclosed-IRIREF does not — all mechanical)."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:Hereditary
+  a shtl:NegativeScope ;
+  rdfs:label "hereditary"@en ;
+  rdfs:comment "The negative must stay negative in EVERY composed superset (e.g. \"x\"@en^^dt); compiler-VERIFIED on every compose, catching a delta that accidentally legalizes it."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:negativeScope
+  a rdf:Property , owl:ObjectProperty , shtl:FunctionalGrammarProperty ;
+  rdfs:label "negative scope"@en ;
+  rdfs:domain shtl:NegativeSyntaxTest ;
+  rdfs:range shtl:NegativeScope ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:negativeFor
+  a rdf:Property , owl:ObjectProperty , shtl:MonotoneProperty ;
+  rdfs:label "negative for"@en ;
+  rdfs:comment "Re-tagging of a negative test after the mechanical superset-membership re-check: the modules whose language provably excludes this document."@en ;
+  rdfs:domain shtl:NegativeSyntaxTest ;
+  rdfs:range shtl:Module ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:ResultLift
+  a rdfs:Class , owl:Class ;
+  rdfs:label "result lift"@en ;
+  rdfs:comment "Reinterpretation of imported expected-result files across a lattice edge: [ shtl:onSuite S ; shtl:lift shtl:IntoDefaultGraph ] reads .nt results as .nq in the default graph — the N-Triples ⊂ N-Quads edge applied to the result-file format itself."@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:resultLift
+  a rdf:Property , owl:ObjectProperty , shtl:MonotoneProperty ;
+  rdfs:label "result lift"@en ;
+  rdfs:domain shtl:TestSuite ;
+  rdfs:range shtl:ResultLift ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:onSuite
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "on suite"@en ;
+  rdfs:domain shtl:ResultLift ;
+  rdfs:range shtl:TestSuite ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:LiftKind
+  a rdfs:Class , owl:Class ;
+  rdfs:label "lift kind"@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:IntoDefaultGraph
+  a shtl:LiftKind ;
+  rdfs:label "into default graph"@en ;
+  rdfs:isDefinedBy mod:shu-ontology .
+
+shtl:lift
+  a rdf:Property , owl:ObjectProperty ;
+  rdfs:label "lift"@en ;
+  rdfs:domain shtl:ResultLift ;
+  rdfs:range shtl:LiftKind ;
+  rdfs:isDefinedBy mod:shu-ontology .

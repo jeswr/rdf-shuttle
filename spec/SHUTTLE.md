@@ -1,43 +1,64 @@
-# Shuttle — a translation-grammar formalism for RDF concrete syntaxes
+# Shuttle — a declarative, RDF-native grammar formalism for RDF concrete syntaxes
 
-**Version:** 0.1 (draft)
+**Version:** 0.2 (draft)
 **Status:** Working draft for review. Nothing here is stable.
+**Design record:** [RFC 0001](../docs/rfc/0001-shuttle-v0.2-design.md) (normative rationale for every decision below).
+**Vocabulary:** [`vocab/shuttle.ttl`](../vocab/shuttle.ttl) · **Well-formedness shapes:** [`vocab/shuttle-shapes.ttl`](../vocab/shuttle-shapes.ttl)
 
-Shuttle is a deterministic, L-attributed translation grammar with relational
-semantics and lens-derived printing. A single Shuttle specification of a
-concrete RDF syntax (a `.shu` file) determines, mechanically:
+> **Supersession notice.** v0.2 supersedes the v0.1 *authoring surface*: the
+> `.shu` clause language of semantic blocks, the seven verbs, `env.x := e`,
+> `thread … in (…)*`, the blank-node label table, and imperative `fresh` are
+> **no longer normative** (§2 shows what replaced each). What **survives
+> unchanged** from v0.1: the relational core (one relation, three modes, §1),
+> the token/primitive-iso layer (§6), the streaming machine and its laws
+> (§7), the print residual-consumption semantics and laws L1–L3 (§8), the
+> generate mode (§9), the shared IR and backends (§12), and the scope
+> boundary (§13). The v0.1 text of those sections is retained below with
+> v0.2 amendments marked. `grammar/shuttle.ebnf`, `grammars/*.shuttle`, and
+> the hand-written meta front-end (`packages/gen-js/src/meta.js`) are retired
+> as normative objects and kept only as v0.1 reference artifacts for the
+> differential gate (§11).
+
+A Shuttle specification of a concrete RDF syntax is an **RDF graph** — a
+*module* of pure-attribute-grammar triples in the `shtl:` vocabulary
+(namespace `https://w3id.org/shuttle/vocab#`; RFC 0001 writes the same
+namespace with the prefix `shu:`). From that graph the toolchain derives,
+mechanically:
 
 1. a **streaming parser** (text → quads, single pass, bounded memory),
-2. a **serializer** (quads → text, derived from the *same* productions, never
-   hand-synchronized), and
-3. a **conformance test generator** producing (document, expected-quads) pairs
-   plus provably-negative syntax tests, in W3C `manifest.ttl` format.
+2. a **serializer** (quads → text, derived from the *same* alternatives,
+   never hand-synchronized), and
+3. a **conformance test generator** producing (document, expected-quads)
+   pairs plus provably-negative syntax tests, in W3C `manifest.ttl` format.
 
 The three artifacts are three *modes* of one denotation, so their mutual
-consistency (round-tripping, oracle validity) is a theorem checked at compile
-time, not a property hoped for across three hand-written codebases.
+consistency is a theorem checked at compile time. New in v0.2, the grammars
+themselves are first-class RDF: **import is named-graph union, extension is
+adding a triple, well-formedness is SHACL conformance, and the meta-syntax
+is Turtle** — one of the very languages in the lattice (§10).
 
-Target syntaxes for v1: N-Triples, N-Quads, Turtle 1.2, TriG 1.2, SHACL
-Compact Syntax, Notation3 (syntax and structural encoding only).
+Target syntaxes: N-Triples, N-Quads, Turtle 1.2, TriG 1.2, SHACL Compact
+Syntax, Notation3 (syntax and structural encoding only).
 
 ---
 
-## 1. Denotational core: one relation, three modes
+## 1. Denotational core: one relation, three modes *(v0.1, surviving)*
 
-A `.shu` file consists of a header, an environment block, oracle declarations,
-token rules, productions, and print policies. Each production `p` denotes a
-relation
+Each production `p` denotes a relation
 
 ```
-R_p  ⊆  Tok* × Tok* × Env × Env × Bag(Quad) × ⟦params⟧ × ⟦value⟧
+R_p  ⊆  Tok* × Tok* × ⟦inh(p)⟧ × Set(Quad) × ⟦syn(p)⟧
 ```
 
-read as: *consuming a prefix of the token stream (difference of the two Tok\*
-components), transforming the environment, emitting a bag of quads, given
-inherited parameter values, and synthesizing a result value.* This is the DCG
-construction with a threaded environment and an emission accumulator.
+read as: *consuming a prefix of the token stream, given inherited attribute
+values, emitting a set of quads, and synthesizing result values.* (v0.2
+amendment: the separately-threaded `Env × Env` pair of v0.1 is now just a
+chained attribute inside `inh`/`syn` — §2; the emission accumulator is a
+**set** by default, `Bag` under an explicit `shtl:emits shtl:TripleBag`
+module.)
 
-Three modes are **derived** from `R_p` by choosing which components are ground:
+Three modes are **derived** from `R_p` by choosing which components are
+ground:
 
 | Mode | Ground | Free | Discipline |
 |---|---|---|---|
@@ -45,454 +66,548 @@ Three modes are **derived** from `R_p` by choosing which components are ground:
 | **print** | quads | text | residual-multiset consumption, prioritized alternatives, policy-refined |
 | **generate** | nothing | text *and* quads | weighted, depth-bounded, coverage-directed enumeration |
 
-The compiler (`shuc`) proves the properties each mode needs — LL determinism,
-L-attributedness/earliest emission, print totality (law L3), token round-trip
-obligations — or **rejects the grammar with a counterexample**. A grammar edit
-that silently breaks streaming or printing fails the build.
-
-Because parser and printer are both refinements of the same relation, the
-round-trip laws of §8 hold by construction, and are additionally tested.
+The compiler proves the properties each mode needs — LL determinism,
+L-attributedness/earliest emission, print totality (law L3), token
+round-trip obligations — or **rejects the grammar with a counterexample**.
+A grammar edit that silently breaks streaming or printing fails the build.
 
 ---
 
-## 2. The RDF term algebra (RDF 1.2, positionally typed)
+## 2. The declarative model (every imperative v0.1 construct, removed)
+
+A v0.2 module denotes, for each IRI-named nonterminal, a typed attribute
+signature `inh(N)`/`syn(N)` and a set of alternatives. Each alternative
+carries:
+
+1. an **ordered syntax row** (`shtl:items`, a closed `rdf:List`) — the ONE
+   ordered thing, because concatenation is ordered;
+2. an **unordered set of pure equations**, one per defined attribute
+   occurrence, statically checked acyclic and single-assignment; an *absent*
+   equation is a Knuth **copy rule**;
+3. an **unordered set of triple templates** ⟨s,p,o[,g][,when]⟩ with
+   SPARQL-CONSTRUCT semantics;
+4. an **unordered set of constraints** (`require` → diagnostic resources
+   with stable error codes; emptiness of the auto-unioned diagnostics
+   attribute defines validity);
+5. **Skolem binders** (`shtl:let` with a `shux:Skolem` expression).
+
+The meaning of a document is the **unique solution of the equation system
+on its LL-deterministic parse tree**; the emitted graph is the set union of
+template instances over the tree. Parse/print/generate remain the three
+groundness modes of §1.
+
+### 2.1 Correspondence: v0.1 construct → v0.2 replacement
+
+| v0.1 (imperative, superseded) | v0.2 (declarative) |
+|---|---|
+| `env.x := e`, threaded `Env × Env` | one `shtl:chain env : Env` declaration per module; the statement spine threads it via **generated** copy rules; a directive is one equation `envOut = update(env, prefixes, bind(env.prefixes, ns, resolve(env.base, i)))`; a triples statement contributes the identity |
+| `thread v : T = init in (…)*` | structural recursion over the right-recursive chain nonterminal the repetition desugars to; collections are the natural unfold (cons cell: `let cell = Skolem`, templates `cell rdf:first o` / `cell rdf:rest tail.head`); authors may write `fold` sugar, macro-defined to exactly this chain |
+| pending-reifier `pend :=` / reset | an inherited `SubjT?` parameter of the annotation chain — scope safety is lexical (the attribute exists only on the chain), not a reset discipline |
+| blank-node label table (`labels` env field, push/pop) | deleted: `_:x` denotes the pure term `skolem(scope, "x")` over an inherited `scope` attribute (constant doc scope for Turtle; the formula's own Skolem for N3 — push/pop becomes one parameter equation) |
+| imperative `fresh` / `fresh()` counter | `shux:Skolem` nodes denoting `bnodeAt(derivation-path, k)`; deterministic `_:b0, _:b1 …` labels are recovered because document-order enumeration of Skolem positions is a bijection — the compiler fuses the Skolem function back into v0.1's counter, now a *correct implementation of a pure semantics* |
+| ordered `{c1; c2}` blocks, seven verbs | four order-free categories: equations (`value`/`let`/env), templates (`emit`+`when`), constraints (`require`), Skolems (`fresh`); `oracle` is a declared pure decidable predicate; `e ?? d` is the total `shtl:otherwise` over option types |
+| `term!` special SemType (NOTE 2) | dissolved: any production may synthesize any term-algebra subtype AND carry templates — value-plus-emissions is just syn typing plus template presence, checked by SHACL positional typing |
+| `skip WS, COMMENT ;` header prose (NOTE 1) | `shtl:skip true` on the terminal — ordinary module data, unioned up the lattice, functional per terminal |
+| `// rdf12`-commented gating (NOTE 3) | the module boundary itself: `mod:turtle11` is a real graph; remaining carvings are `shtl:Profile`s |
+| loose print-guard prose (NOTE 4) | the closed, IRI-identified guard vocabulary with declared `shtl:requiresIndex` (§8) |
+
+### 2.2 Streaming reconciliation
+
+Order-freedom *licenses* streaming: since the denotation is a set, any
+emission order is correct, so the compiler picks the earliest, via four
+derived analyses replacing v0.1's authored discipline:
+
+- **(a) L-attributedness check** per alternative over the equation
+  dependency graph (classic ordered-AG test; failure yields the offending
+  cycle; `shtl:buffered true` is the visible opt-out);
+- **(b) groundness-point analysis** per template, with *prediction-time
+  synthesis*: attributes computable from clause selection + constants +
+  Skolems + inherited attributes are ground at the callee's **first token**
+  — this is why `cell rdf:rest tail.head` fires as each element closes, and
+  why Skolem pre-availability lets v0.2 emit `:s :p _:c0` at `(` — one
+  token *earlier* than v0.1's hand-placed emit;
+- **(c) linearization:** tail-recursive chains compile to loops
+  (`O(depth + |env| + token)` memory); single-threaded chained attributes
+  compile to one in-place record — the compiler *introduces* the mutation
+  v0.1 made authors write; genuinely duplicated envs (N3 formulae) fall
+  back per-field to an O(1)-amortized undo log;
+- **(d) Skolem→counter fusion.**
+
+Every production **exports** a `shtl:strictness` class —
+`shtl:Immediate | [a shtl:AfterTokens; shtl:k n] | shtl:AtEnd` — that
+deltas must keep: a caller's schedule depends only on callees' strictness
+classes, never their clause lists, so **schedule stability under extension
+is contractual** (§5).
+
+---
+
+## 3. The RDF term algebra (RDF 1.2, positionally typed) *(v0.1, surviving; now first-class RDF)*
 
 ```
 type dir     = ltr | rtl
-type term    = iri(abs: string)
-             | bnode(id)
-             | literal(lex: string, dt: iri, lang: string?, dir: dir?)
+type term    = iri(abs) | bnode(id)
+             | literal(lex, dt, lang?, dir?)
              | tt(s: subjT, p: iri, o: term)          // triple term; nests via o only
-             | var(name)                              // profile n3 only
+             | var(name)                              // n3 modules only
 type subjT   = iri | bnode
-type graphT  = default | iri | bnode | formula(id)    // formula: profile n3
+type graphT  = default | iri | bnode | formula(id)    // formula: n3 modules
 quad = (subjT, iri, term, graphT)
 ```
 
-Constructor invariants make ill-formed RDF 1.2 data **unrepresentable**:
+v0.2 amendment: the subtype lattice is **first-class RDF** in the
+vocabulary — `shtl:Iri ⊑ shtl:SubjT ⊑ shtl:Term`, `shtl:TripleTermT ⊑
+shtl:Term` and `owl:disjointWith shtl:SubjT`, `shtl:Iri/shtl:BnodeT ⊑
+shtl:GraphT` — and template positions are typed against it by SHACL
+(`shtl:s ⊑ SubjT`, `shtl:p ⊑ Iri`, `shtl:o ⊑ Term`, `shtl:g ⊑ GraphT`),
+validated over the merged import closure **before the compiler runs**.
+Constructor invariants survive verbatim:
 
-- `lang` present without `dir` forces `dt = rdf:langString`; `lang` and `dir`
-  present forces `dt = rdf:dirLangString`. A source form like `"x"@en^^dt` is a
-  *syntax* error by grammar shape, never a runtime check.
-- The emission primitive is typed `emit : subjT × iri × term [@ graphT]`.
-  A triple term in subject position, a literal in predicate position, etc. are
-  **type errors in the grammar** — a Shuttle grammar that could produce
-  generalized RDF does not compile (except under an explicit future profile).
-- Triple terms `tt(s,p,o)` nest through the object component only, matching
-  RDF 1.2.
+- `lang` without `dir` forces `rdf:langString`; `lang` + `dir` forces
+  `rdf:dirLangString`; `"x"@en^^dt` stays unlexable by clause shape.
+- `shux:tt : (SubjT, Iri, Term) → TripleTermT` — a triple term in subject
+  or predicate position is a **type error on the grammar graph itself**;
+  object-only nesting is a subtype fact.
+- **Lexical fidelity:** literal lexical forms are preserved verbatim
+  (Turtle's `0.9` is `literal("0.9", xsd:decimal)`, never a host float).
 
-**Lexical fidelity.** Literal lexical forms are preserved verbatim: Turtle's
-`0.9` parses to `literal("0.9", xsd:decimal)`, not to a host float. This is
-what keeps the numeric-sugar print alternatives exactly invertible.
-
----
-
-## 3. Environment and attributes
-
-All parsing context is *declared*; nothing hides in host-language state.
-
-```
-env {
-  base     : iri = <> ;                    // RFC 3986 resolution via the resolve iso
-  prefixes : map<string, iri> = {} ;
-  labels   : scoped map<string, bnode> ;   // document scope; N3 formulae push/pop scopes
-  version  : string? ;                     // RDF 1.2 VERSION directive, no emission
-}
-```
-
-- **Inherited attributes** are typed production parameters (e.g. the current
-  subject, the current graph). Parameters not passed explicitly **auto-copy**
-  from the lexically enclosing production when names and types match (the
-  classic attribute-grammar copy-rule convention). This is what collapses,
-  e.g., shaclc-js's mutable `currentNodeShape`/`nodeShapeStack` globals into a
-  single declared parameter that nesting can never clobber.
-- **Synthesized attributes** are the production's typed result (`value = e`).
-- **Effect rows.** Every production carries
-  `[emits, gen, reads env.X, writes env.X]`; a caller's row must cover the
-  union of its callees'. The three mode analyses are computed from these rows,
-  and the row doubles as machine-checked documentation.
-- **Threaded locals.** A repetition may open a locally threaded accumulator:
-
-  ```
-  thread v : T = init in ( ... )*
-  ```
-
-  Formally this is an inherited attribute on the desugared repetition-chain
-  nonterminal (hence fully analyzable); a linearity check licenses compiling it
-  to a plain in-place loop variable (hence fast).
-- **`fresh`** draws blank nodes from a per-derivation counter, yielding
-  deterministic labels `_:b0, _:b1, …` — conformance pairs and round-trips are
-  bit-reproducible.
+Constructor signatures are triples (`shux:tt shtl:sig (shtl:SubjT shtl:Iri
+shtl:Term); shtl:returns shtl:TripleTermT`), so deltas can only **add**
+constructors — RDF 1.1 modules compile unchanged against RDF 1.2 closures.
 
 ---
 
-## 4. The meta-notation (canonical)
+## 4. The `shtl:` grammar vocabulary (grammars ARE RDF)
 
-This section is normative for how Shuttle specifications are written. The
-grammar of the meta-language itself is given in
-[`grammar/shuttle.ebnf`](../grammar/shuttle.ebnf).
+Namespaces: `shtl:` = `https://w3id.org/shuttle/vocab#` (ontology in
+[`vocab/shuttle.ttl`](../vocab/shuttle.ttl), itself an importable module
+`mod:shu-ontology`), `shux:` = `https://w3id.org/shuttle/expr#`
+(expressions), modules under `https://w3id.org/shuttle/mod/`.
 
-### 4.1 Production form
+A module is a **named graph whose name is the module IRI**. Extensible
+resources — productions, alternatives, templates, terminals, tests,
+policies, isos — MUST be IRI-identified; blank nodes are legal only for
+non-extensible internals (items, expressions, attribute declarations).
+SHACL-enforced.
 
+| Layer | Resources & predicates |
+|---|---|
+| **module** | `shtl:Module`; `shtl:imports` (⊑ `owl:imports`, acyclic DAG, semantics = named-graph union of the transitive closure, compiled only against a hash-pinned lockfile); `shtl:Profile` ⊑ Module with `shtl:profileOf`/`excludes`/`includesOnly`; `shtl:start`; `shtl:specRef` (mandatory spec pin); `shtl:emits` (TripleSet\|QuadSet\|TripleBag\|QuadBag); `shtl:chain` (declares a chained attribute threaded by generated copy rules) |
+| **syntax** | `shtl:Production` (`shtl:inh`/`shtl:syn` → `shtl:AttrDecl` [`name`,`type`,`default`]; `shtl:strictness` — the exported streaming contract; `shtl:buffered`); `shtl:Alternative` with `shtl:alternativeOf` (**THE extension point: an OPEN predicate** — a production's alternative set is whatever the import closure asserts); `shtl:items` (closed `rdf:List` — order lives here only); items `shtl:Lit(text)`, `shtl:TerminalRef(terminal)`, `shtl:NonterminalRef(calls,args,bind)`, `shtl:Opt/Star/Plus/SepList(of,sep)`, each with a normative desugaring into fresh right-recursive productions; `fold` sugar likewise |
+| **semantic** | `shtl:Equation` (`onAlternative`, `target` [own-attr string or `shtl:Occurrence(ofItem,attr)`], `expr`, `otherwise`); **absent equation = copy rule**; `shtl:TripleTemplate` (`onAlternative` — open — `s`,`p`,`o`,`g` [default: inherited g],`when`); `shtl:Constraint` (`test`,`errorCode`); `shtl:let` → `shtl:LetBinding`; expressions `shux:App(fn,args)`, `shux:AttrRef(item,attr)`, `shux:VarRef(name)`, `shux:Case`, `shux:Skolem` (explicit node — never a bare blank node); constants are the RDF terms **themselves** (`rdf:first` in a template is the IRI `rdf:first`) |
+| **terminal** | `shtl:Terminal` (`shtl:pattern` — anchored `shtl:regex` literal + optional `structuredPattern`; functional, one per closure); `shtl:fragment`; `shtl:skip`; `shtl:valueIso`/`unparseIso` → `shtl:Iso` (`forwardFn`,`backwardFn`,`lossy`+`canonicalizer`); `shtl:extendsTerminal` (declared language-superset obligation, checked by lexical conservativity); `shtl:reservedAgainst` (tie-breaks as queryable triples) |
+| **print** | `shtl:prefer` (rank on alternatives); `shtl:printGuard` → the **closed, IRI-identified guard vocabulary** (`shtl:listShaped`, `shtl:freshSingleUse`, `shtl:reifiesQuadPresent`, `shtl:needsLongQuoting`, `shtl:abbreviable`), each declaring `shtl:requiresIndex`; `shux:And/Or/Not` compositions; `shtl:PrintPolicy` (`orderBy`, `groupBySubject`, `prefixMining`, `directivePlacement`, `layout`); guard-free fallbacks live in the **least module declaring the production** |
+| **test** | `shtl:TestSuite` ⊑ Module (`suiteFor`; Suite(M) = tests of the import closure); `shtl:EvalTest`/`PositiveSyntaxTest`/`NegativeSyntaxTest` ⊑ `rdft:` classes with `mf:action`/`mf:result` reused verbatim; `shtl:negativeScope` (`ThisLanguage` default \| `Hereditary`); `shtl:negativeFor` (mechanical re-tagging); `shtl:resultLift` (`[shtl:onSuite S; shtl:lift shtl:IntoDefaultGraph]`) |
+| **reflective** | `shtl:MonotoneProperty` (extension may add: `alternativeOf`, `onAlternative`, inh-fields-with-defaults, `suiteFor`, prefer-ranked candidates, guards, tests, terminals, constructors) vs `shtl:FunctionalGrammarProperty` (at most one per closure: pattern per terminal, equation per occurrence, synthesized type per production, strictness, guard-free fallback per group) — **the vocabulary classifies its own predicates**; violations are hard errors reported **with both named graphs** |
+
+Worked fragment (the collection cons cell — the structural-recursion pair
+replacing v0.1's `thread prev`):
+
+```turtle
+ttl:cellChain a shtl:Production ;
+  shtl:syn [ shtl:name "head" ; shtl:type shtl:Term ] ;
+  shtl:strictness [ a shtl:AfterTokens ; shtl:k 1 ] .
+
+ttl:cellChain-cons a shtl:Alternative ;
+  shtl:alternativeOf ttl:cellChain ;
+  shtl:items (
+    [ a shtl:NonterminalRef ; shtl:calls nt:object    ; shtl:bind "o" ]
+    [ a shtl:NonterminalRef ; shtl:calls ttl:cellChain ; shtl:bind "t" ]
+  ) ;
+  shtl:let [ shtl:name "cell" ; shtl:expr [ a shux:Skolem ] ] ;
+  shtl:eq  [ shtl:target "head" ; shtl:expr [ a shux:VarRef ; shux:name "cell" ] ] .
+
+ttl:cc-first a shtl:TripleTemplate ;
+  shtl:onAlternative ttl:cellChain-cons ;
+  shtl:s [ a shux:VarRef ; shux:name "cell" ] ;
+  shtl:p rdf:first ;
+  shtl:o [ a shux:AttrRef ; shux:item "o" ; shux:attr "value" ] ;
+  shtl:g [ a shux:AttrRef ; shux:attr "g" ] .
+
+ttl:cc-rest a shtl:TripleTemplate ;
+  shtl:onAlternative ttl:cellChain-cons ;
+  shtl:s [ a shux:VarRef ; shux:name "cell" ] ;
+  shtl:p rdf:rest ;
+  shtl:o [ a shux:AttrRef ; shux:item "t" ; shux:attr "head" ] ;
+  shtl:g [ a shux:AttrRef ; shux:attr "g" ] .
 ```
-Name(p1: T1, …) : SemType [effects]
-  ::= alternative
-    | alternative
-  ;
-```
 
-- `Name(p1: T1, …)` — the nonterminal and its typed **inherited parameters**.
-- `SemType` — the synthesized type:
+Note the deliberate ouroboros: `shtl:items` uses the very
+`rdf:first`/`rdf:rest` cells the collection production defines.
 
-  | SemType | meaning | example |
-  |---|---|---|
-  | `term` | pure value, **no emissions** | `tripleTerm` |
-  | `term!` | value **and** emissions | `reifiedTriple`, `blankNodePropertyList` |
-  | `graph` | emissions only, no value | `predicateObjectList` |
-  | `unit` | neither | directives |
-  | scalar types | token/value results | `(string, dir?)` |
+### 4.1 Well-formedness = SHACL conformance
 
-- `[effects]` — the effect row (§3). Omitted means pure.
+A grammar graph is **well-formed iff its merged import closure conforms to
+[`vocab/shuttle-shapes.ttl`](../vocab/shuttle-shapes.ttl)** (`mod:shu-shapes`)
+— checkable by *any* RDF stack with zero Shuttle tooling. The shapes encode:
 
-### 4.2 Right-hand sides
+- **arities** (every layer: one `alternativeOf` + one `items` per
+  alternative, one `calls` per ref, one `pattern` per terminal, s/p/o
+  exactly once per template, …);
+- **one-equation-per-occurrence** and single-assignment lets (the pairwise
+  FunctionalGrammarProperty conflicts, reported on the alternative);
+- **acyclicity / L-attributedness as a shape**: argument expressions on a
+  call, and equations targeting an inherited occurrence, may reference only
+  items strictly to the LEFT of that call; degenerate self-reference cycles
+  are rejected at the data level;
+- **positional term typing incl. RDF 1.2**: constructed values in `shtl:s`
+  must return ⊑ `SubjT` (so `shux:tt` in subject position is a SHACL
+  violation — object-only nesting of triple terms is checked on the grammar
+  graph), `shtl:p` ⊑ `Iri` (no literal or bnode predicates), `shtl:g` ⊑
+  `GraphT`;
+- **Skolem linearity** (structural half): a `shux:Skolem` node is the
+  `shtl:expr` of exactly one binder, never inline, never shared;
+- **IRI-on-extensible-resources** (productions, alternatives, templates,
+  terminals, tests, policies, isos).
 
-An alternative is an EBNF sequence of items:
-
-- `'text'` — quoted terminal.
-- `NAME` / `Name(args)` — token reference / nonterminal call with arguments.
-- `x=E` — binding of an item's value.
-- `E?  E*  E+` — optional / repetition.
-- `( E ) % ','` — one-or-more `E` separated by the terminal (sugar for the
-  obvious chain).
-- `thread v : T = e in ( … )*` — threaded local over a repetition (§3).
-- `{ clause ; … }` — a **semantic block**, attachable after any item; clauses
-  execute left-to-right at that point in the derivation.
-
-### 4.3 Semantic clauses (the seven verbs)
-
-Each clause has a **normative dual reading**. The parse column defines the
-parser; the print column defines the serializer; both are readings of the same
-relational clause. There are exactly seven:
-
-| clause | parse reading | print reading |
-|---|---|---|
-| `value = e` | construct term from captures | pattern-match the goal term, bind captures |
-| `emit s p o [@g] [when c]` | assert quad the instant all args are ground | consume exactly one matching quad from the residual; `when` inverts by clause solving |
-| `fresh b` | gensym from the derivation counter | linear match: this bnode is printed by exactly this site |
-| `let x = e ?? d` | compute with default | invert `e`; if the source quad is absent, `x = d` |
-| `env.x := e` | update env left-to-right | read the print policy; emit the directive |
-| `require c else error E` | well-formedness check (`E` is a stable error code) | holds by construction; `E` doubles as a negative-test generator hook |
-| `oracle O(args) -> cl ; otherwise -> cl` | consult the declared decidable predicate | discharged from the consumed quad's shape instead — never ambiguous backward |
-
-`fresh` also has an expression form `fresh()` for anonymous allocation
-(e.g. `let rr = r ?? fresh()`); both forms share the counter and both invert to
-linear bnode matches. `{ clause ; … ; e }` may be used as a block *expression*
-whose value is its final expression.
-
-### 4.4 Alternative discipline
-
-**Parsing.** Alternatives are order-independent and must be parse-disjoint
-under LL(k≤2) after automatic left-factoring; the compiler emits conflict
-counterexamples otherwise. Token-level disambiguation — `<` vs `<<` vs `<<(`,
-`@prefix` vs LANGTAG vs `@version`, PN_LOCAL trailing dot — is declared in
-token rules with longest-match, exactly where the W3C specs resolve it. There
-is no ordered choice and no backtracking: mis-ordering alternatives cannot
-silently change the language, which matters for a *specification* formalism.
-
-**Printing.** The same alternatives form a **prioritized group**:
-
-- `@prefer(n)` orders candidates (lower prints first).
-- `@when(pred)` guards a sugar alternative. Guards are declared, or *inferred*
-  from iso domains (a bare-number alternative's guard is membership in the
-  INTEGER token language — costs the author nothing).
-- Every prioritized group **must** end in a guard-free fallback (law L3,
-  checked statically). Fallbacks degrade prettiness, never correctness.
-
-**Other annotations.**
-`@covers(tag)` marks alternatives for coverage accounting.
-`@oracle name(types)` declares an external decidable predicate (e.g. SHACL-C's
-recognized-datatype registry).
-`@buffered` opts one production out of the streaming check (none of the six v1
-grammars need it).
-`@maxdepth(k)` bounds nesting; enforced by the generated machines.
-`print { … }` / `print fallback N` (a trailing directive on the production) is
-the hand-written print escape hatch, in the same file — no second spec to
-drift.
-`@native(js|rust) { … }` exists but forfeits invertibility and oracle status
-for that rule; it is a measured admission, not a loophole.
+The deeper theorems — LL(k≤2) disjointness against imported FIRST
+summaries, strictness-contract preservation, L3 totality, lexical
+conservativity, full ordered-AG cycle analysis — sit **above** the shapes,
+in the compiler, which consumes the same graph.
 
 ---
 
-## 5. Tokens and primitive isos
+## 5. Modules, imports, and the subset lattice
 
-Tokens are **strictly regular**; each carries a value transducer:
+**Mechanism.** Module = named graph; `shtl:imports` = transitive
+named-graph union (idempotent, so the TriG diamond over N-Triples is free);
+compilation always against a **hash-pinned lockfile** (graph IRI → content
+hash) closing RDF's open world into a sound compile unit. Each compiled
+module exports an **interface summary graph** (per-production FIRST/FOLLOW
+contributions, strictness classes, attribute-dependency summaries,
+groundness frontiers, token automaton, print-guard index needs, context-row
+type, content hash), so composition is summary-based and incremental.
+
+**Extension is monotone triple-addition ONLY:** new alternatives on visible
+production IRIs, templates on your OWN alternatives, terminals,
+constructors, chain-field widenings with defaults (imported equations never
+mention new fields, so they lift via copy rules unchanged; env compiles to
+a single record pointer, so imported *compiled* code is ABI-stable —
+N-Triples' compiled productions serve Turtle unmodified), prefer-ranked
+guarded print candidates, tests. **No override of any kind exists in v0.2
+core.** Where the subset relation forces a shape change (the statement
+seam), the lattice bottom is **pre-factored** instead: `nt:statement ::=
+subject predicateObjectList '.'` with N-Triples' predicateObjectList having
+exactly one degenerate alternative (`verb object`) — same language,
+W3C-Turtle-shaped spine — and Turtle adds the `;`/`,` chain alternatives
+monotonically.
+
+**Four delta-checked contracts** make extension safe:
+
+1. **LL(k≤2) disjointness** of new alternatives against imported FIRST
+   summaries (fail = counterexample naming both alternative IRIs and home
+   graphs; imported parses are bitwise identical — never silent reshaping);
+2. **lexical conservativity:** the merged token DFA must tokenize the
+   imported token language identically (LANG_DIR ⊒ LANGTAG passes);
+3. **strictness contracts:** a new alternative binding the synthesized
+   value later than the production's declared class is rejected *at the
+   delta* — no import can demote a streaming production to buffered;
+4. **L3 stability:** guard-free fallbacks are pinned to the least declaring
+   module and survive any extension.
+
+**Restriction** only via `shtl:Profile`: `excludes`/`includesOnly` may
+remove only *sugar* (never a guard-free fallback ⇒ L(profile) ⊆ L(base) and
+print totality automatic), no dangling references, profiles import only
+profiles. Prefer-ties across diamonds are a hard conflict, resolved
+explicitly, never silently.
+
+**The lattice.**
 
 ```
-token LANG_DIR : (string, dir?)
-  ::= '@' [a-zA-Z]+ ('-' [a-zA-Z0-9]+)* ('--' ('ltr'|'rtl'))?
-  => (langCanon(lang), dir)
-  unparse (l, d) = '@' l (d? '--' d : '') ;
+mod:rdf-terms  (term algebra, isos, guard vocabulary, shapes — defined ONCE)
+   └─ mod:ntriples11   terminals IRIREF/STRING_LITERAL_QUOTE/BLANK_NODE_LABEL/LANGTAG
+      │                + WS/COMMENT skips; pre-factored spine; ONE template ⟨s,p,o,@g⟩
+      │                (inherited g : GraphT defaults to shtl:defaultGraph);
+      │                canonical one-line print policy; ntriples11-tests
+      ├─ mod:turtle11  = ntriples11 + Δ: PNAME/ANON/number/boolean/string terminals;
+      │                  chain env gains prefixes+base (row widening, zero edits);
+      │                  directives (pure env equations); pOL/objectList chains,
+      │                  collections, bnpl — each ADDED to imported choice points;
+      │                  prefer/guards on sugar — the imported N-Triples alternatives
+      │                  ARE the guard-free fallbacks: THE LATTICE IS THE L3 CHAIN
+      ├─ mod:nquads11  = ntriples11 + graph-labels: one production delta (optional
+      │                  graph label); ZERO semantic delta — the template was
+      │                  quad-shaped all along; module-closed constant folding keeps
+      │                  the Turtle artifact free of the graph slot
+      ├─ mod:trig11    = turtle11 + nquads11 (diamond free): wrappedGraph + GRAPH;
+      │                  every Turtle template streams into TriG unmodified (all were
+      │                  parametric in g); the W3C bare-4-column discrepancy is the
+      │                  trig-w3c PROFILE excluding nq:statement — one triple, not a fork
+      ├─ mod:n3        = turtle11 + n3-terms (Var, Formula(scope) ⊑ GraphT): formulae
+      │                  are two inherited-field updates; QUICK_VAR; paths desugar to
+      │                  fresh-object chaining (streamable by construction); '=>'
+      │                  sugars log:implies
+      └─ RDF 1.2 as a delta layer: mod:rdf12-terms (tt, dirLangString, LANG_DIR
+                         extendsTerminal LANGTAG) shared by all four line/sugar
+                         syntaxes; ntriples12 = ntriples11 + rdf12-terms + (tripleTerm,
+                         object-tt alternative, LANG_DIR); turtle12 = turtle11 +
+                         ntriples12 + (reifiedTriple, reifier, annotationChain with
+                         inherited pend, version directive as one env equation);
+                         nquads12/trig12 likewise
 ```
+
+**Coherence theorems** (compiler-checked, both directions of every edge):
+`profile(turtle12 − rdf12Δ) ≡ turtle11`; `profile(turtle11, fallbacks-only)
+≡ ntriples11` (plus a language-equivalence test against the W3C N-Triples
+EBNF, discharging the pre-factoring fidelity risk); `profile(trig12,
+no-braces) ≡ nquads12`.
+
+**Tests accrete UP:** `turtle11-tests` imports `ntriples11-tests` — every
+(doc, expected) pair runs verbatim against the Turtle parser because
+extension is conservative (checked: no templates on alternatives reachable
+in the imported language; violations need an explicit
+`shtl:nonConservative` flag). Crossing a triples→quads edge declares
+`shtl:resultLift shtl:IntoDefaultGraph` (`.nt` results reinterpreted as
+`.nq` in the default graph — the lattice pays for its own test
+infrastructure). **Negatives:** `shtl:ThisLanguage` (default) accretes down
+profile edges only and is mechanically re-decided by LL-table membership in
+supersets, re-tagged `shtl:negativeFor`; `shtl:Hereditary` negatives
+(`"x"@en^^dt`) are re-verified against every composed superset.
+
+**Name resolution:** all names are IRIs; no scoping, shadowing, or import
+renaming; file-local prefixes are cosmetic; dangling IRI = compile error
+naming the missing module; "the definition" of a resource = the triples
+about it in the pinned closure, with named-graph provenance on every
+conflict report.
+
+**Net result:** every syntax in the family is import + small delta; nothing
+is defined twice; the W3C-suite anchor for N-Triples is paid once and
+inherited by every superset; serializer sharing is free (§8); a W3C WD
+change lands as an edit to exactly one module and propagates by import.
+
+---
+
+## 6. Terminals and primitive isos *(v0.1, surviving; now module data)*
+
+Tokens are **strictly regular**; each terminal is an IRI-named resource
+with an anchored `shtl:pattern` regex (optional structured form for
+auditing) and `shtl:valueIso`/`shtl:unparseIso` transducers.
 
 Value transducers are built from a closed set of **primitive isos** —
 `resolve/relativize`, `expandPName/abbreviate`,
 `unescapeString/escapeString(quoteStyle)`, `unescapeU`, `langCanon` — the
-trusted leaves of the system. They ship once per toolchain as an audited
-runtime library with property-tested round-trip obligations
-(`fwd ∘ bwd = id` on the print domain), plus differential tests against a
-reference implementation before a release may serve as a conformance oracle.
-Non-injective transducers must be declared `@lossy` with a canonicalizer.
+trusted leaves of the system, IRI-identified in `mod:rdf-terms`. They ship
+once per toolchain as an audited runtime library with property-tested
+round-trip obligations (`fwd ∘ bwd = id` on the print domain), plus
+differential tests against a reference implementation before a release may
+serve as a conformance oracle. Non-injective transducers are declared
+`shtl:lossy` with a `shtl:canonicalizer`.
 
-The token automaton is a suspendable DFA: chunk boundaries suspend mid-token,
-retaining only the incomplete token — no rescanning of a growing buffer.
-
-**Honest lexing.** The W3C "context-free" grammars quietly rely on contextual
-lexing; Shuttle declares that resolution in token rules (longest-match rules
-per token) instead of hiding it in prose.
+The token automaton is a suspendable longest-match DFA: chunk boundaries
+suspend mid-token, retaining only the incomplete token. **Honest lexing**
+survives: contextual resolution (`<` vs `<<` vs `<<(`, `@prefix` vs LANGTAG,
+PN_LOCAL trailing dot) is declared in terminal data (`shtl:reservedAgainst`
+tie-breaks as queryable triples), exactly where the W3C specs resolve it in
+prose. v0.2 additions: `shtl:skip` is unioned module data (a module cannot
+flip an imported terminal's skip status), and `shtl:extendsTerminal`
+declares language-superset obligations (LANG_DIR ⊒ LANGTAG) checked by
+lexical conservativity on the merged DFA.
 
 ---
 
-## 6. Parse mode: the L-attributed streaming discipline
+## 7. Parse mode: the L-attributed streaming discipline *(v0.1, surviving; checks now derived)*
 
-The central compile-time theorem is stated once:
+The central compile-time theorem is unchanged:
 
 > Every attribute is computable in a single left-to-right pass **iff** every
-> `emit` fires at the earliest point its arguments are ground.
+> template fires at the earliest point its arguments are ground.
 
-L-attributedness and earliest-emission scheduling are the same check. The
-compiler verifies it per production and reports a named error (with the
-offending attribute flow) when it fails; `@buffered` is the explicit, visible
-opt-out.
+v0.2 derives the schedule from the four analyses of §2.2 instead of an
+authored discipline, and freezes it across module composition via exported
+`shtl:strictness` classes. The generated parser is recursive descent
+compiled to an **explicit-stack resumable machine**:
 
-The generated parser is recursive descent compiled to an **explicit-stack
-resumable machine**:
-
-- quads leave the parser the instant their arguments are ground (see the
-  worked stream orders in [`examples/`](../examples/));
+- quads leave the parser the instant their arguments are ground (Skolem
+  pre-availability makes collection/bnpl subjects available one token
+  earlier than v0.1);
 - memory is `O(depth + |env| + longest token)`;
-- push-mode / chunked input, mid-token suspension (§5);
-- immune to host-stack overflow; `@maxdepth` enforced.
+- push-mode / chunked input, mid-token suspension (§6);
+- immune to host-stack overflow; depth bounds enforced by the machine.
 
 **Laws (parse):** deterministic; total on the token language; streaming as
-above.
+above; **stable under import** (a delta can add alternatives but never
+reschedule imported emission).
 
 ---
 
-## 7. Print mode: the serializer, derived
+## 8. Print mode: the serializer, derived *(v0.1, surviving; guards now IRIs, sharing via the lattice)*
 
-The serializer is not written; it is the **backward reading** of the same
-productions (§4.3, print column).
-
-**Residual-consumption semantics.** Printing a graph `G` starts with `G` as a
-residual multiset. Each `emit s p o` consumes exactly one matching quad;
-`fresh b` matches a blank node linearly (printed by exactly this site);
-Kleene repetitions become match-driven iteration; alternatives are tried in
-`@prefer` order subject to `@when` guards, ending at the guard-free fallback.
-**Print succeeds iff the residual empties.** Serializer completeness is
-thereby a checkable property, not a hope.
+The serializer is the **backward reading** of the same alternatives.
+**Residual-consumption semantics** (unchanged): printing a graph `G` starts
+with `G` as a residual multiset; each template consumes exactly one
+matching quad; Skolem sites are linear blank-node matches; repetitions
+become match-driven iteration; alternatives are tried in `shtl:prefer`
+order subject to `shtl:printGuard` guards, ending at the guard-free
+fallback. **Print succeeds iff the residual empties.**
 
 **Laws.**
 
-- **L1** `parse(print(G, π)) ≅ G` for every policy `π` (≅ = graph isomorphism;
-  blank nodes may relabel).
-- **L2** `parse ∘ print ∘ parse = parse` (idempotence at the graph level).
-- **L3** (totality) every prioritized group ends guard-free, so
-  `dom(print) =` all RDF 1.2 graphs for the Turtle family (proved by the
-  compiler), and a *proper subset* for SHACL-C — where print failure is the
-  **correct** verdict "this graph is not SHACL-C-expressible", reported with
-  the non-empty residual. Partiality is a feature: the generated writer is a
-  decision procedure for expressibility.
-- Byte-level round-tripping is explicitly **not** promised (L1/L2 are
-  graph-level; lexical forms of literals are preserved, layout is not).
+- **L1** `parse(print(G, π)) ≅ G` for every policy `π` (graph isomorphism).
+- **L2** `parse ∘ print ∘ parse = parse`.
+- **L3** (totality) every prioritized group ends guard-free — and in v0.2
+  the **lattice IS the L3 chain**: the imported N-Triples alternatives are
+  the guard-free fallbacks of every superset, so "canonical N-Triples
+  output of any Turtle graph" is just printing under the ntriples profile.
+  For SHACL-C, print failure remains the *correct* verdict "not
+  SHACL-C-expressible", reported with the non-empty residual.
+- Byte-level round-tripping is explicitly **not** promised (lexical forms
+  of literals are preserved; layout is not).
 
-**Two generated printers per grammar.**
+**Guards** are the closed, IRI-identified vocabulary of §4 (home module
+`mod:print-core`): each guard declares `shtl:requiresIndex`, so the
+compiler derives **exactly which indexes** the closure's guards need and
+emits that as the store interface (batch-pretty), while stream-pretty
+evaluates guards against the subject window only and falls back to L3 when
+non-local evidence is missing. Extensions may mint new guard IRIs with
+declared index needs — monotone and summary-graph-visible.
 
-- *batch-pretty*: guards may consult `match(s,p,o)` and object-incidence
-  counts; the compiler derives **exactly which indexes** the guards need and
-  emits that as the store interface — any conforming store qualifies.
-- *stream-pretty*: `window = subject`; guards evaluate against the window
-  only; whenever non-local evidence is missing, the L3 fallback prints a plain
-  statement — uglier, still law-abiding.
-
-**Policies** (`print policy` blocks) refine, never redefine: ordering,
-grouping, prefix mining, directive placement, layout skeleton. The policy
-vocabulary is a fixed declarative set (§10, Q4) — deliberately not a
-programming language.
-
-**Duplicate quads.** Print consumes an exact-once cover: duplicate source
-statements collapse, as in every RDF toolchain (L1/L2 are stated over graphs).
-Line-oriented profiles (N-Triples/N-Quads) may declare `emits triples bag` /
-`emits quads bag` in the header to preserve multiplicity through a round-trip.
+**Policies** are modules that refine, never redefine (`shtl:PrintPolicy`:
+ordering, grouping, prefix mining, directive placement, layout skeleton);
+pretty-policy refines canonical-policy; restriction can only lose branches,
+so a profile's printer is total and only faster. **Duplicate quads:** set
+semantics is normative for the laws; line-oriented profiles may declare
+`shtl:emits shtl:TripleBag`/`shtl:QuadBag`; test accretion across a
+set/bag edge applies direction-of-accretion coercion explicitly.
 
 ---
 
-## 8. Generate mode: conformance pairs
+## 9. Generate mode: conformance pairs *(v0.1, surviving; suites are modules)*
 
-The generator runs the relation with nothing ground, threading the **same
-environment** forward — pnames are drawn only from declared prefixes, base
-resolution is live, the label table is live — so generated documents are
-semantically valid **by construction**, never by post-filtering.
+The generator runs the relation with nothing ground, threading the same
+chained attributes forward — pnames are drawn only from declared prefixes,
+base resolution is live, Skolem scopes are live — so generated documents
+are semantically valid **by construction**.
 
-- **Coverage-directed:** the sampler targets the coverage map over
-  (production × alternative × token-boundary bucket × print-guard both ways);
-  `@covers` tags feed the accounting.
+- **Coverage-directed** over (production × alternative × token-boundary
+  bucket × print-guard both ways).
 - **Boundary-biased token sampling:** escape classes, surrogate-adjacent
   codepoints, PN_LOCAL dot/colon/percent hazards, long-string quote runs.
-- **Deterministic:** `fresh` labels are `_:b0, _:b1, …`; pairs are
-  reproducible from a seed.
-- **Automorphism-free graphs** are generated so expected-vs-actual comparison
-  is a linear isomorphism check.
+- **Deterministic:** Skolem enumeration yields `_:b0, _:b1, …`; pairs are
+  reproducible from a seed; automorphism-free graphs keep the isomorphism
+  check linear.
 
-**Negative tests**, two provably-sound families:
+**Negative tests**, two provably-sound families (unchanged): LL-table
+mutants (provably outside the language, verified against the compiled parse
+mode) and semantic negatives per `shtl:errorCode`. v0.2 adds the scoping
+data model: `shtl:negativeScope` and mechanical `shtl:negativeFor`
+re-tagging up the lattice (§5).
 
-1. **LL-table mutants** — single-token corruptions chosen from the parse
-   tables, hence *provably* outside the language (no human judgment needed;
-   this construction is unavailable to PEG-based formalisms), each verified
-   against the compiled parse mode before shipping.
-2. **Semantic negatives** — one generator per `require … else error E` clause,
-   tagged with the expected stable error code.
+**Output:** W3C-format `manifest.ttl` plus (document, expected) pairs —
+suites are `shtl:TestSuite` modules importing `mf:`/`rdft:` verbatim, so
+existing rdf-tests harnesses consume them unchanged, and W3C manifests
+import directly into the suite lattice.
 
-**Output:** W3C-format `manifest.ttl` plus (document, expected `.nq`) pairs —
-`rdft:TestTurtleEval` / `PositiveSyntax` / `NegativeSyntax` analogues per
-profile — drop-in for existing rdf-tests harnesses.
-
-**Trust anchor:** the toolchain ships a slow reference interpreter of the
-compiled IR. It must replay the official W3C rdf12 test suites (and shaclc's
-suite) *before* a Shuttle spec is used as an oracle, and it is the standing
-differential-fuzzing counterpart to the fast generated parsers.
-
-This machinery has already earned its keep: first-wave alternative coverage of
-the `annotation` production (§9) generated the trailing-bare-reifier case
-`:s :p :o ~ :r2 .`, exposing three distinct RDF 1.2 conformance failures in a
-current hand-written parser (duplicated assertion, dropped `rdf:reifies` quad,
-reifier leaking into the next statement).
+**Trust anchor** (unchanged): the slow reference interpreter of the
+compiled IR must replay the official W3C rdf12 suites before a Shuttle spec
+is used as an oracle.
 
 ---
 
-## 9. RDF 1.2 core (normative rendering)
+## 10. Self-hosting & reflective closure
 
-These productions are shared by the Turtle-family grammars and are the
-reference rendering of the trickiest RDF 1.2 semantics.
+Two loops, one grounded bootstrap, all CI-checked.
 
-```
-tripleTerm : term
-  ::= '<<(' s=ttSubject p=verb o=ttObject ')>>'  { value = tt(s,p,o) } ;   // pure
+**Loop 1 — grammars are RDF, and Turtle is in the lattice:** a v0.2 grammar
+IS a `shtl:` graph normally written in Turtle, so "parse a grammar" = run
+the parser generated from `mod:turtle12` (itself one of these graphs) and
+SHACL-validate against `mod:shu-shapes`. **The meta-syntax IS Turtle**;
+grammar well-formedness = SHACL conformance (§4.1), checkable by any RDF
+stack with zero Shuttle tooling.
 
-reifiedTriple : term! [emits, gen]
-  ::= '<<' s=rtSubject p=verb o=rtObject r=reifier? '>>'
-  { let rr = r ?? fresh() ; emit rr rdf:reifies tt(s,p,o) ; value = rr } ;
+**Loop 2 — the `.shu` authoring surface is an ordinary module:**
+`mod:shu-surface` is a Shuttle grammar whose *emitted triples* are the
+`shtl:` grammar graph (text→RDF like any other syntax), and whose derived
+printer is the canonical graph→`.shu` pretty-printer — never
+hand-synchronized; any surface feature must have an RDF projection by
+construction. Self-test: `parse_shu(shu-surface.shu) ≅ ⟦mod:shu-surface⟧`.
 
-reifier : term! [gen] ::= '~' e=(iri | BlankNode)?  { value = e ?? fresh() } ;
+**Bootstrap order** (finite, explicit trusted base):
 
-annotation(s: subjT, p: iri, o: term) : graph [emits, gen]
-  ::= thread pend : subjT? = none in
-      (   r=reifier          { emit r rdf:reifies tt(s,p,o) ; pend := some(r) }
-        | '{|'               { let a = pend ?? { fresh f ;
-                                                 emit f rdf:reifies tt(s,p,o) ; f } }
-          predicateObjectList(a)
-          '|}'               { pend := none }
-      )*
-  print { prefer sugar when residual has (s,p,o) consumed
-          and ?r rdf:reifies tt(s,p,o) present ; fallback: plain statements } ;
+- **Stage 0** — a tiny hand-written N-Triples reader plus the v0.1
+  reference IR interpreter load the distribution's module graphs shipped in
+  canonical N-Triples (the most restricted lattice point is the bootstrap
+  format — itself a lattice statement): `ntriples12.nt`, `turtle12.nt`.
+- **Stage 1** — compile and generate the Turtle parser; re-read every
+  module in its normative `.ttl` form; check seed-parsed graph ≅
+  self-parsed graph (trusting-trust cross-check).
+- **Stage 2** — regenerate all artifacts from the re-read graphs; check the
+  **fixpoint**: stage-2 compiled IR bit-identical to stage 1.
 
-objectList(s: subjT, p: iri) : graph [emits, gen]
-  ::= ( o=object { emit s p o } annotation(s,p,o) ) % ',' ;
+**Shipped closure tests** (in the conformance suite, run in CI):
+(1) quine round-trip `parse_turtle12(print_turtle12(G_turtle12)) ≅
+G_turtle12`; (2) the stage-2 bootstrap fixpoint; (3) meta-shape
+self-application: `mod:shu-shapes` validates its own graph and
+`mod:shu-ontology`'s; (4) the v0.1↔v0.2 differential gate (§11).
 
-RDFLiteral : term
-  ::= lex=String
-      ( ld=LANG_DIR   { value = case ld of (l, none)   -> literal(lex, rdf:langString, l)
-                                           (l, some d) -> literal(lex, rdf:dirLangString, l, d) }
-      | '^^' dt=iri   { value = literal(lex, dt) }
-      |               { value = literal(lex, xsd:string) } ) ;
-```
+Self-hosting thereby stops being v0.1's aspirational Q7 exit criterion and
+becomes a **standing build invariant**; the trusted base narrows to the
+stage-0 N-Triples reader + the audited primitive-iso library, and is stated
+as such (threat model).
 
-Readings worth spelling out:
-
-- `tripleTerm` is a pure `term`: the inner triple is **not** asserted.
-- `reifiedTriple` denotes its reifier and emits exactly one `rdf:reifies`
-  quad; because the emit fires at groundness, a reified triple in *subject*
-  position emits **before** the enclosing statement's quads.
-- The `pend` thread encodes the pending-reifier rule: `~ :r {| … |}` reuses
-  `:r` (no second reifies quad); consecutive bare `{| … |}` blocks mint
-  distinct fresh reifiers; `pend` cannot leak across statements because the
-  thread's scope is the repetition.
-- `LANG_DIR` makes `rdf:dirLangString` arise by construction; `@ar--rtl^^dt`
-  is unparseable.
-
-Collections and blank-node property lists are ordinary productions (threaded
-head/prev locals emitting `rdf:first`/`rdf:rest` cells as parsed;
-`[ … ]` = `fresh` + `predicateObjectList`). TriG:
-`wrappedGraph ::= g=labelOrSubject? '{' triplesBlock(g ?? default) '}'` with
-`emit … @ g`. N3: a formula pushes a `labels` scope, allocates `formula(id)`,
-sets the graph parameter, and synthesizes the formula term.
-
-Header and modularity:
-
-```
-grammar turtle12 ; target rdf-1.2 ; start turtleDoc ; emits triples ;   // or: emits quads
-profile turtle ;         // turtle | trig | ntriples | nquads | n3 | shaclc — gates productions
-import core-terms ;      // shared token/production modules; TriG = import turtle12 + graph param
-```
-
-Each `.shu` file **must** also carry a `spec-ref` pragma pinning the exact
-W3C document (and Working Draft date, while RDF 1.2 is in flux) it encodes;
-see §10, Q1.
+**Reflective dividends:** grammars, deltas, tests, policies, and analysis
+*outputs* (conflict reports, derived strictness, coverage maps — emitted as
+annotation graphs) are all RDF in one queryable dataset — "which
+alternatives of `nt:object` did trig12 add and which tests cover them" is a
+SPARQL query; grammar diffs are graph diffs; spec pins are provenance;
+third-party extension needs no package manager beyond w3id-dereferenced,
+hash-pinned graphs.
 
 ---
 
-## 10. Resolved and open questions
+## 11. Performance & the v0.1 differential gate
 
-The design synthesis raised ten questions. Resolutions adopted in this draft:
+The RDF grammar graph is **compile-time only**: graph → SHACL → AG analyses
+→ the *unchanged* v0.1 shared IR (explicit-stack resumable machine,
+suspendable token DFA, reverse match plans) → existing backends
+(`gen-js`, …). Module structure is **erased before codegen**: the composed
+artifact is bit-identical whether authored monolithically or as a union of
+deltas (module-erasure guarantee), and module-closed constant folding drops
+the graph slot from the Turtle parser.
 
-| # | Question | Resolution in v0.1 |
-|---|---|---|
-| Q1 | RDF 1.2 Working-Draft flux (pending reifier, `VERSION`, dir-lang) | **Resolved (process):** every `.shu` file pins its source spec via a mandatory `spec-ref` pragma (document + WD date); the `annotation`/`reifier` productions must be re-verified when RDF 1.2 reaches CR. Upstream bug reports for the parser failures found in §8 are handled outside this repo, coordinated with the active N3.js performance/conformance efforts. |
-| Q3 | Trust in primitive isos (RFC 3986 corner cases) | **Resolved:** property-tested round-trip obligations *plus* mandatory differential testing against a reference implementation are release gates for the iso library; a formally verified implementation is explicitly not required for v1. |
-| Q4 | Print-policy expressiveness | **Resolved:** a fixed declarative vocabulary (ordering, grouping, prefix mining, directive placement, layout skeleton), no user-defined functions, target ≤ ~30 lines per grammar. Revisit only if a real serializer need breaks it. |
-| Q5 | Isomorphism checking for third-party outputs | **Resolved:** the core harness keeps the linear check (valid because generated graphs are automorphism-free and pairs keep the bnode correspondence). RDFC-1.0 canonicalization is an optional harness plugin, out of core. |
-| Q6 | JSON-LD fixed-context profile | **Resolved:** deferred until the six core grammars ship. The scope boundary (§11) stands. |
-| Q7 | Bootstrap order | **Resolved:** hand-written `shuc` front-end → N-Triples → Turtle 1.2 → W3C-suite anchor → benchmark gate → TriG/SHACL-C → N3. Self-hosting (the meta-grammar of [`grammar/shuttle.ebnf`](../grammar/shuttle.ebnf) rewritten in Shuttle) is the v1 exit criterion, not the starting point. |
-| Q9 | Duplicate-quad round-tripping | **Resolved:** set semantics (exact-once cover) is normative for graph-level laws; line-oriented profiles may opt into `emits … bag` (§7) to preserve multiplicity. |
+CI obligations:
 
-Remaining **open** questions, carried forward:
-
-- **Q2 — LL(2) sufficiency for N3.** Turtle/TriG/N-Triples/N-Quads/SHACL-C are
-  confirmed LL(≤2) after left-factoring and token-level resolution. N3 path
-  syntax (`!`/`^`) and formula corners still need verification. Ruling if it
-  fails: the offending production takes an explicit `@buffered`, visibly.
-- **Q8 — Performance-claim discipline.** The 2–4x-over-N3.js JS target must be
-  demonstrated on the pinned benchmark harness against a stated N3.js version
-  (re-checked against its open perf PRs) before any public claim. Gate
-  ownership and the normative corpus are not yet assigned.
-- **Q10 — Error-message quality.** LL tables give precise expected-token sets
-  and `require` codes give stable semantic diagnostics, but polished recovery
-  and reporting is unscheduled backend work; the first release targets the
-  conformance-tooling audience.
+- the **v0.1↔v0.2 IR α-equivalence gate**: v0.1 `turtle12.shuttle` and the
+  v0.2 turtle12 module graph must lower to α-equivalent IR (same states,
+  same emit sites modulo the earlier Skolem emissions);
+- the pinned **Q8 benchmark harness** re-run per composed artifact
+  (turtle12, trig12) against a **stated N3.js version** — the baseline
+  moves with the live N3.js perf series, so the claim is re-earned per
+  release.
 
 ---
 
-## 11. Scope boundary (declared, not discovered later)
+## 12. Derived-artifact contract (informative summary) *(v0.1, surviving; front-end swapped)*
+
+Pipeline: load hash-pinned module closure → SHACL well-formedness
+(`mod:shu-shapes`) → AG analyses (L-attributedness/earliest-emission;
+copy-rule elision; chain linearization; Skolem fusion) → grammar analysis
+(desugaring, left-factoring, FIRST/FOLLOW, LL(k≤2) tables with conflict
+counterexamples; token DFA with longest-match resolution; delta contracts
+i–iv of §5) → print analysis (reverse match plans; guard index derivation;
+L3 proof) → the **shared IR** (unchanged from v0.1) → backends
+`--emit js | rust | tests`. JS and Rust artifacts are
+conformance-identical by construction because both are emitted from the
+same IR; the reference interpreter of that IR is the oracle and fuzzing
+counterpart.
+
+---
+
+## 13. Scope boundary (declared, not discovered later) *(v0.1, surviving)*
 
 - **JSON-LD:** the surface JSON is expressible; the triple mapping is
-  algorithmic (`@context` processing, remote fetching) and out of core. The
-  honest offering is a *fixed-context profile* — a context known at generator
-  time compiles to a specialized bidirectional grammar (deferred, §10 Q6).
+  algorithmic and out of core. The honest offering remains a fixed-context
+  profile (deferred).
 - **HDT:** a binary format, not a grammar problem — excluded.
 - **N3 logic** (`log:implies`, quantifier meaning): downstream of quad
   emission — Shuttle covers N3 syntax and structural encoding only.
 
 ---
 
-## 12. Derived-artifact contract (informative summary)
+## 14. Open questions
 
-`shuc` pipeline: parse + typecheck the clause language → effect-row check →
-attribute analysis (L-attributed/earliest-emission; copy-rule elision;
-threaded-local linearity) → grammar analysis (desugaring, left-factoring,
-FIRST/FOLLOW, LL(k≤2) tables with conflict counterexamples; token DFA with
-longest-match resolution) → print analysis (reverse match plans; guard
-inference; L3 proof; index-requirement derivation) → a **shared IR** →
-backends `--emit js | rust | tests`. JS and Rust artifacts are
-conformance-identical by construction because both are emitted from the same
-IR; the reference interpreter of that IR is the oracle and fuzzing
-counterpart. Performance targets and the benchmark protocol are tracked
-outside this spec (see §10, Q8).
+Carried in [RFC 0001 §"Open questions"](../docs/rfc/0001-shuttle-v0.2-design.md)
+(ranked by risk): pre-factoring fidelity of the N-Triples spine; N3 LL(2)
+sufficiency; performance evidence against a pinned N3.js; conservativity
+approximation ergonomics (`shtl:nonConservative`); strictness granularity
+(is AfterTokens(k) the right contract lattice); lockfile/w3id versioning
+operations; diamond prefer-ties; bag/set coercion at accretion edges;
+bootstrap trust statement.

@@ -1,0 +1,16 @@
+{
+  "name": "rdf-shuttle-vocab",
+  "private": true,
+  "type": "module",
+  "description": "Shuttle v0.2 vocabulary (shtl:) + SHACL well-formedness shapes, with a parse/SPARQL/SHACL validation gate",
+  "scripts": {
+    "validate": "node validate.mjs"
+  },
+  "devDependencies": {
+    "@rdfjs/data-model": "^2.1.0",
+    "@rdfjs/dataset": "^2.0.2",
+    "n3": "^1.26.0",
+    "shacl-engine": "^1.1.2",
+    "sparqljs": "^3.7.3"
+  }
+}
