@@ -1,0 +1,15 @@
+{
+  "name": "rdf-shuttle-bench",
+  "private": true,
+  "type": "module",
+  "description": "Benchmark harness: generated turtle12 parser vs N3.js on a shared corpus",
+  "dependencies": {
+    "n3": "^1.26.0"
+  },
+  "scripts": {
+    "corpus": "node gen-corpus.js",
+    "bench": "node bench-one.js shuttle corpus-ttl11.ttl && node bench-one.js n3 corpus-ttl11.ttl",
+    "size": "node code-size.js",
+    "stream": "node stream-demo.js"
+  }
+}

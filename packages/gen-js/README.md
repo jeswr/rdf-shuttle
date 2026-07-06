@@ -1,0 +1,99 @@
+# @rdf-shuttle/gen-js — the Shuttle JS backend
+
+Consumes a `.shuttle` grammar and emits **one dependency-free ES module**
+containing a streaming parser (syntax → RDF/JS quads), a chunked push parser
+with bounded memory, and a serializer (quads → syntax) — the parse and print
+modes of the same relation (spec/SHUTTLE.md §1).
+
+```
+node src/cli.js ../../grammars/turtle12.shuttle -o generated/turtle12.js
+```
+
+```js
+import { parse, parseToQuads, createPushParser, parseStream, writeQuads, createWriter }
+  from '@rdf-shuttle/gen-js/turtle12';
+
+parse(text, { onQuad: (q) => …, baseIRI });        // one-shot, RDF/JS quads
+const p = createPushParser({ onQuad });            // p.push(chunk); p.end()
+const ttl = writeQuads(quads, { prefixes });       // print mode
+```
+
+## Pipeline
+
+`src/meta.js` parses the meta-language of `grammar/shuttle.ebnf` (header, env
+block, token rules, productions, the seven-verb clause language, unparse
+templates). Then:
+
+- **`lexer-gen.js`** compiles token rules to direct-coded `charCodeAt`
+  matchers: no regexes, no token objects — a token is `(kind:int, start,
+  end)` plus an escapes-seen flag and boundary marks. First-char dispatch
+  switch (128 entries + non-ASCII fallback); longest-match across the
+  candidate set with declaration-order tie-break (`@prefix` beats LANG_DIR,
+  exactly the overlap resolutions the grammar declares). The `X* Y`
+  trailing-context idiom (PN_LOCAL dots) compiles to a single forward scan
+  tracking the last Y-element end — linear, escape-safe. Long strings
+  compile to a quote-run scanner. Prefix subsumption folds PNAME_NS into the
+  PNAME_LN scan (one scan decides both). Chunk boundaries: any matcher that
+  touches the buffer end sets a flag and the driver suspends the statement
+  (`INCOMPLETE`) instead of committing a shorter match.
+- **`parser-gen.js`** compiles productions to recursive descent with LL(1)
+  dispatch over token kinds (FIRST/nullable computed; overlaps are generator
+  errors). Semantic blocks compile via **`clausec.js`**; `emit` fires exactly
+  where the grammar places it (earliest emission), `thread` locals become
+  loop variables, `fresh` is the deterministic per-derivation counter,
+  `require … else error E` throws the stable code E. Recursive productions
+  carry an explicit `@maxdepth` guard.
+- **`serializer-gen.js`** emits the print mode (stream-pretty window):
+  term rendering follows the `@prefer`/`@when` structure of the prioritized
+  groups; *inferred* guards (bare numbers, booleans) are full-match functions
+  generated from the very token patterns the lexer uses; PN_LOCAL
+  escaping/validation is derived from the grammar's charsets; statement
+  shape (`;` `,` `.` `a` `<<( )>>` `@prefix`) is extracted from the
+  production/token ASTs.
+- **`runtime.inc.js`** is the audited primitive-iso library (spec §5):
+  RFC 3986 `resolve`, unescape/escape families, `langCanon`, and the RDF/JS
+  term classes + DataFactory. It ships once per toolchain and is inlined
+  into every artifact.
+
+## Conformance
+
+`npm test` regenerates the artifact and runs the oracle pairs
+(`tests/conformance/turtle12-eval-01…22`): parser obligation
+(parse(.ttl) ≅ parse(.nt), graph isomorphism), serializer round-trip
+(L1/L2, plain and prefix-abbreviated), chunked push parsing (7-byte chunks),
+and negative cases (undeclared prefix → `UNDECLARED_PREFIX`, `"x"@prefix`
+keyword tie). Status: **91/91 — all 22 pairs pass in all four modes.**
+
+## Honest scope notes (v0.1)
+
+Grammar-driven vs. not, stated plainly:
+
+- The lexer, parser dispatch, clause semantics, and the serializer's term
+  decision trees are compiled from the grammar AST. Changing the grammar
+  changes the artifact.
+- The serializer's **structural sugar guards** (`listShaped`,
+  `freshSingleUse`, `reifiesQuadPresent`) need residual-graph indexes the
+  stream window does not have; v0.1 evaluates them as false, so collections,
+  `[ … ]`, and annotation blocks print as plain statements — the L3
+  guard-free fallback (spec §7). Batch-pretty (index-backed guards) is the
+  natural next step.
+- `case`/tuple patterns are compiled for the shapes the six v1 grammars use
+  (option-discriminated pairs), not the full pattern language.
+- The **reference interpreter** of the shared IR (the conformance oracle and
+  fuzzing anchor) does not exist yet; the oracle pairs are the current trust
+  anchor. `--emit tests` and `--emit rust` are later waves.
+
+## Meta-language gaps surfaced by this backend (v0.1 feedback)
+
+Beyond NOTE 1–4 in `grammars/turtle12.shuttle`:
+
+- **NOTE 5 (token captures).** Token rules have no capture syntax: the `=>`
+  expressions name parts (`body`, `ns`, `local`, `lang`, `dir`) that the
+  backend resolves by convention (fixed literal affixes, sub-token-ref name
+  matching, trailing-optional position). Proposal: explicit bindings in
+  token bodies, e.g. `'@' lang=([a-zA-Z]+ ('-' …)*) ('--' dir=(…))?`.
+- **NOTE 6 (skip declaration).** This backend implements the proposed
+  `skip WS, COMMENT ;` header clause and defaults to it when absent.
+- **NOTE 7 (iso arity).** `unescapeString(body, dquote)`'s second argument is
+  a quote-style constant, not a capture — the iso signature table should be
+  normative so backends need not special-case it.
