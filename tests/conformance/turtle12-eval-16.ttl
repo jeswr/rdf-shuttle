@@ -1,0 +1,2 @@
+@prefix ex: <http://example.org/> .
+ex:g ex:claims <<( ex:s ex:says <<( ex:a ex:b ex:c )>> )>> .

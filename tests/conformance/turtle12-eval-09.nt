@@ -1,0 +1,5 @@
+<http://example.org/s> <http://example.org/integer> "42"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<http://example.org/s> <http://example.org/negative> "-7"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<http://example.org/s> <http://example.org/decimal> "0.9"^^<http://www.w3.org/2001/XMLSchema#decimal> .
+<http://example.org/s> <http://example.org/double> "1.2e3"^^<http://www.w3.org/2001/XMLSchema#double> .
+<http://example.org/s> <http://example.org/leadingDot> ".5"^^<http://www.w3.org/2001/XMLSchema#decimal> .

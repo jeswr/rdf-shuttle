@@ -1,0 +1,5 @@
+@prefix ex: <http://example.org/> .
+ex:alice a ex:Person ;
+    ex:name "Alice" ;
+    ex:age 30 ;
+    .

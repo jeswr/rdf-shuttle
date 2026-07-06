@@ -1,0 +1,165 @@
+## Shuttle Turtle 1.2 conformance oracle pairs — hand-authored seed set.
+## See README.md in this directory for the pair discipline.
+
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix mf:   <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix rdft: <http://www.w3.org/ns/rdftest#> .
+
+<> a mf:Manifest ;
+   rdfs:label "Shuttle turtle12 evaluation pairs (seed oracle for generate mode)" ;
+   mf:entries (
+     <#turtle12-eval-01>
+     <#turtle12-eval-02>
+     <#turtle12-eval-03>
+     <#turtle12-eval-04>
+     <#turtle12-eval-05>
+     <#turtle12-eval-06>
+     <#turtle12-eval-07>
+     <#turtle12-eval-08>
+     <#turtle12-eval-09>
+     <#turtle12-eval-10>
+     <#turtle12-eval-11>
+     <#turtle12-eval-12>
+     <#turtle12-eval-13>
+     <#turtle12-eval-14>
+     <#turtle12-eval-15>
+     <#turtle12-eval-16>
+     <#turtle12-eval-17>
+     <#turtle12-eval-18>
+     <#turtle12-eval-19>
+     <#turtle12-eval-20>
+     <#turtle12-eval-21>
+     <#turtle12-eval-22>
+   ) .
+
+<#turtle12-eval-01> a rdft:TestTurtleEval ;
+   mf:name "prefix-basic" ;
+   rdfs:comment "@prefix directive and a single triple of prefixed names (cf. W3C turtle-subm-01 family)." ;
+   mf:action <turtle12-eval-01.ttl> ;
+   mf:result <turtle12-eval-01.nt> .
+
+<#turtle12-eval-02> a rdft:TestTurtleEval ;
+   mf:name "base-resolve" ;
+   rdfs:comment "@base directive; relative, fragment, absolute-path and network-path reference resolution (RFC 3986 via the resolve iso)." ;
+   mf:action <turtle12-eval-02.ttl> ;
+   mf:result <turtle12-eval-02.nt> .
+
+<#turtle12-eval-03> a rdft:TestTurtleEval ;
+   mf:name "sparql-style-directives" ;
+   rdfs:comment "SPARQL-style PREFIX and BASE (case-insensitive keywords, no trailing dot)." ;
+   mf:action <turtle12-eval-03.ttl> ;
+   mf:result <turtle12-eval-03.nt> .
+
+<#turtle12-eval-04> a rdft:TestTurtleEval ;
+   mf:name "predicate-object-list" ;
+   rdfs:comment "predicateObjectList with ';' separators, the 'a' keyword, and a trailing empty ';' segment (cf. W3C turtle-subm-02 / predicateObjectList tests)." ;
+   mf:action <turtle12-eval-04.ttl> ;
+   mf:result <turtle12-eval-04.nt> .
+
+<#turtle12-eval-05> a rdft:TestTurtleEval ;
+   mf:name "object-list" ;
+   rdfs:comment "objectList with ',' separators; each object emits at the earliest point it is ground." ;
+   mf:action <turtle12-eval-05.ttl> ;
+   mf:result <turtle12-eval-05.nt> .
+
+<#turtle12-eval-06> a rdft:TestTurtleEval ;
+   mf:name "blank-node-property-lists" ;
+   rdfs:comment "blankNodePropertyList as subject and as object; fresh-before-descent bnode allocation order _:b0, _:b1." ;
+   mf:action <turtle12-eval-06.ttl> ;
+   mf:result <turtle12-eval-06.nt> .
+
+<#turtle12-eval-07> a rdft:TestTurtleEval ;
+   mf:name "collections" ;
+   rdfs:comment "Nested collection and the empty collection (rdf:nil); rdf:first/rdf:rest cells stream out via the threaded prev local of collectionBody." ;
+   mf:action <turtle12-eval-07.ttl> ;
+   mf:result <turtle12-eval-07.nt> .
+
+<#turtle12-eval-08> a rdft:TestTurtleEval ;
+   mf:name "blank-node-labels" ;
+   rdfs:comment "Document-scoped blank node labels: every occurrence of a label maps to the same bnode via env.labels; deterministic relabelling to _:b0, _:b1." ;
+   mf:action <turtle12-eval-08.ttl> ;
+   mf:result <turtle12-eval-08.nt> .
+
+<#turtle12-eval-09> a rdft:TestTurtleEval ;
+   mf:name "numeric-literals" ;
+   rdfs:comment "INTEGER / DECIMAL / DOUBLE sugar with signs and leading-dot decimal; lexical forms preserved verbatim (lexical fidelity, spec SHUTTLE.md section 2)." ;
+   mf:action <turtle12-eval-09.ttl> ;
+   mf:result <turtle12-eval-09.nt> .
+
+<#turtle12-eval-10> a rdft:TestTurtleEval ;
+   mf:name "boolean-and-typed-literals" ;
+   rdfs:comment "BooleanLiteral keywords and an explicitly datatyped literal ('^^' iri)." ;
+   mf:action <turtle12-eval-10.ttl> ;
+   mf:result <turtle12-eval-10.nt> .
+
+<#turtle12-eval-11> a rdft:TestTurtleEval ;
+   mf:name "string-forms" ;
+   rdfs:comment "All four string quote styles, ECHAR escapes, a real newline in a long string, and a UCHAR escape (unescapeString/unescapeU isos)." ;
+   mf:action <turtle12-eval-11.ttl> ;
+   mf:result <turtle12-eval-11.nt> .
+
+<#turtle12-eval-12> a rdft:TestTurtleEval ;
+   mf:name "language-tags" ;
+   rdfs:comment "Language-tagged strings (rdf:langString); LANG_DIR with no direction suffix (cf. W3C LITERAL_with_language tests)." ;
+   mf:action <turtle12-eval-12.ttl> ;
+   mf:result <turtle12-eval-12.nt> .
+
+<#turtle12-eval-13> a rdft:TestTurtleEval ;
+   mf:name "dir-language-tags" ;
+   rdfs:comment "RDF 1.2 directional language tags: LANG_DIR '--ltr'/'--rtl' suffix produces rdf:dirLangString by construction." , "Requires RDF 1.2 (profile turtle; not in turtle-1.1)." ;
+   mf:action <turtle12-eval-13.ttl> ;
+   mf:result <turtle12-eval-13.nt> .
+
+<#turtle12-eval-14> a rdft:TestTurtleEval ;
+   mf:name "version-directive" ;
+   rdfs:comment "RDF 1.2 VERSION directive (SPARQL style): writes env.version, emits nothing." , "Requires RDF 1.2 (profile turtle; not in turtle-1.1)." ;
+   mf:action <turtle12-eval-14.ttl> ;
+   mf:result <turtle12-eval-14.nt> .
+
+<#turtle12-eval-15> a rdft:TestTurtleEval ;
+   mf:name "triple-term" ;
+   rdfs:comment "RDF 1.2 triple term in object position: pure term, the inner triple is NOT asserted." , "Requires RDF 1.2 (profile turtle; not in turtle-1.1)." ;
+   mf:action <turtle12-eval-15.ttl> ;
+   mf:result <turtle12-eval-15.nt> .
+
+<#turtle12-eval-16> a rdft:TestTurtleEval ;
+   mf:name "triple-term-nested" ;
+   rdfs:comment "Triple terms nest through the object component only (tt(s,p,o) with o itself a triple term)." , "Requires RDF 1.2 (profile turtle; not in turtle-1.1)." ;
+   mf:action <turtle12-eval-16.ttl> ;
+   mf:result <turtle12-eval-16.nt> .
+
+<#turtle12-eval-17> a rdft:TestTurtleEval ;
+   mf:name "reified-triple-subject" ;
+   rdfs:comment "Reified-triple sugar in SUBJECT position: fresh reifier _:b0; its rdf:reifies quad emits before the enclosing statement quad (examples/turtle12.md E6/E7)." , "Requires RDF 1.2 (profile turtle; not in turtle-1.1)." ;
+   mf:action <turtle12-eval-17.ttl> ;
+   mf:result <turtle12-eval-17.nt> .
+
+<#turtle12-eval-18> a rdft:TestTurtleEval ;
+   mf:name "reified-triple-object-and-bare" ;
+   rdfs:comment "Reified triple with explicit reifier in object position, plus a bare reified-triple statement (predicateObjectList optional per WD 2026-06-12)." , "Requires RDF 1.2 (profile turtle; not in turtle-1.1)." ;
+   mf:action <turtle12-eval-18.ttl> ;
+   mf:result <turtle12-eval-18.nt> .
+
+<#turtle12-eval-19> a rdft:TestTurtleEval ;
+   mf:name "annotation-block" ;
+   rdfs:comment "Bare annotation block: pend is none, so a fresh reifier _:b0 is minted and one rdf:reifies quad emitted; the annotated triple is also asserted." , "Requires RDF 1.2 (profile turtle; not in turtle-1.1)." ;
+   mf:action <turtle12-eval-19.ttl> ;
+   mf:result <turtle12-eval-19.nt> .
+
+<#turtle12-eval-20> a rdft:TestTurtleEval ;
+   mf:name "annotation-pending-reifier" ;
+   rdfs:comment "Pending-reifier rule: '~ ex:r {| ... |}' reuses ex:r — exactly one rdf:reifies quad, no fresh bnode." , "Requires RDF 1.2 (profile turtle; not in turtle-1.1)." ;
+   mf:action <turtle12-eval-20.ttl> ;
+   mf:result <turtle12-eval-20.nt> .
+
+<#turtle12-eval-21> a rdft:TestTurtleEval ;
+   mf:name "annotation-trailing-bare-reifier" ;
+   rdfs:comment "Trailing bare reifier: single assertion plus one rdf:reifies quad, and the reifier must NOT leak into the next statement (the spec SHUTTLE.md section 8 regression: this pair exposed three failures in a hand-written parser)." , "Requires RDF 1.2 (profile turtle; not in turtle-1.1)." ;
+   mf:action <turtle12-eval-21.ttl> ;
+   mf:result <turtle12-eval-21.nt> .
+
+<#turtle12-eval-22> a rdft:TestTurtleEval ;
+   mf:name "annotation-multiple-blocks" ;
+   rdfs:comment "Two reifiers then two annotation blocks: first block binds to pending ex:r2, second block (pend reset to none) mints fresh _:b0 with its own rdf:reifies quad." , "Requires RDF 1.2 (profile turtle; not in turtle-1.1)." ;
+   mf:action <turtle12-eval-22.ttl> ;
+   mf:result <turtle12-eval-22.nt> .

@@ -1,0 +1,481 @@
+/* ===================================================================
+ * turtle12.shuttle — Turtle 1.2 in the Shuttle formalism
+ *
+ * One specification; three derived artifacts (spec/SHUTTLE.md §1):
+ * a streaming parser (text → triples), a serializer (the backward
+ * reading of these same productions), and a conformance-pair
+ * generator whose oracle pairs live in tests/conformance/.
+ *
+ * Meta-notation: spec/SHUTTLE.md §4, grammar/shuttle.ebnf.
+ * Production names and shapes track the W3C grammar one-for-one so
+ * the two documents can be diffed by eye; semantic blocks carry the
+ * triple-generating semantics the W3C spec states in prose.
+ *
+ * Turtle 1.1 profile: see grammars/turtle11.shuttle. Alternatives
+ * and tokens that exist only in RDF 1.2 are marked  // rdf12
+ * =================================================================== */
+
+grammar turtle12 ;
+target rdf-1.2 ;
+spec-ref "RDF 1.2 Turtle, W3C Working Draft 12 June 2026, https://www.w3.org/TR/rdf12-turtle/ — re-verify reifier/annotation (pending-reifier rule) and VERSION when RDF 1.2 reaches CR (spec/SHUTTLE.md §10 Q1)" ;
+start turtleDoc ;
+emits triples ;
+profile turtle ;
+import core-terms ;      // rdf:, xsd: constant curies; primitive isos (spec §5)
+
+/* -------------------------------------------------------------------
+ * Environment (spec §3). All parsing context is declared here;
+ * nothing hides in host-language state.
+ * ------------------------------------------------------------------- */
+
+env {
+  base     : iri = <> ;                    // RFC 3986 resolution via the resolve iso
+  prefixes : map<string, iri> = {} ;
+  labels   : scoped map<string, bnode> ;   // document scope: Turtle never pushes a scope
+  version  : string? ;                     // RDF 1.2 VERSION directive; no emission
+}
+
+/* ===================================================================
+ * 1. Tokens
+ *
+ * Strictly regular; longest-match/maximal-munch resolves every
+ * overlap the W3C spec resolves in prose ("honest lexing", spec §5):
+ *   - '<' vs '<<' vs '<<('           (IRIREF / reifiedTriple / tripleTerm)
+ *   - 'a' vs PN_PREFIX               ('a:x' lexes as PNAME_LN)
+ *   - 'PREFIX' vs PNAME_NS           ('PREFIX:' lexes as PNAME_NS)
+ *   - PN_LOCAL trailing dot          (excluded by the token language
+ *                                     itself: 'ex:a.' = PNAME_LN 'ex:a'
+ *                                     then '.', never inside the name)
+ *   - '@prefix'/'@base'/'@version' are reserved against LANG_DIR:
+ *     the keyword tokens win the equal-length tie, so `"x"@prefix` is
+ *     a negative-syntax case, matching the W3C suites.
+ *
+ * ALL_CAPS rules referenced only from other token rules are fragments
+ * (never emitted as tokens themselves); marked  // fragment
+ * =================================================================== */
+
+/* ---- skip tokens (consumed between any two tokens; see NOTE 1) ---- */
+
+token WS      : unit ::= [\u0020\u0009\u000D\u000A]+ ;
+token COMMENT : unit ::= '#' [^\u000A\u000D]* ;
+
+/* ---- keywords ----------------------------------------------------- */
+
+token AT_PREFIX  : unit ::= '@prefix' ;
+token AT_BASE    : unit ::= '@base' ;
+token AT_VERSION : unit ::= '@version' ;                          // rdf12
+token KW_PREFIX  : unit ::= [Pp][Rr][Ee][Ff][Ii][Xx] ;            // case-insensitive (SPARQL style)
+token KW_BASE    : unit ::= [Bb][Aa][Ss][Ee] ;
+token KW_VERSION : unit ::= [Vv][Ee][Rr][Ss][Ii][Oo][Nn] ;        // rdf12
+
+/* ---- IRIs and prefixed names -------------------------------------- */
+
+token IRIREF : string
+  ::= '<' ([^\u0000-\u0020<>"{}|^`\\] | UCHAR)* '>'
+  => unescapeU(body)
+  unparse s = '<' escapeU(s) '>' ;
+  /* Relative-reference resolution happens in the `iri` production,
+   * where the read of env.base is visible in an effect row. */
+
+token PNAME_NS : string                    /* value: the prefix label, '' for ':' */
+  ::= PN_PREFIX? ':'
+  => prefixLabel(body)
+  unparse p = p ':' ;
+
+token PNAME_LN : (string, string)          /* (prefix label, unescaped local part) */
+  ::= PNAME_NS PN_LOCAL
+  => (prefixLabel(ns), unescapeLocal(local))
+  unparse (p, l) = p ':' escapeLocal(l) ;
+
+/* ---- blank nodes --------------------------------------------------- */
+
+token BLANK_NODE_LABEL : string
+  ::= '_:' (PN_CHARS_U | [0-9]) ((PN_CHARS | '.')* PN_CHARS)?
+  => labelPart(body)                       /* text after '_:' */
+  unparse l = '_:' l ;
+
+token ANON : unit ::= '[' WS* ']' ;
+  /* single token, so `[]` (ANON) vs `[ :p :o ]` (blankNodePropertyList)
+   * is decided by the lexer, exactly as in the W3C grammar */
+
+/* ---- language tags -------------------------------------------------- */
+
+token LANG_DIR : (string, dir?)                                    // rdf12: '--' dir suffix
+  ::= '@' [a-zA-Z]+ ('-' [a-zA-Z0-9]+)* ('--' ('ltr' | 'rtl'))?
+  => (langCanon(lang), dir)
+  unparse (l, d) = '@' l (d? '--' d : '') ;
+
+/* ---- numbers -------------------------------------------------------- */
+
+token INTEGER : string ::= [+-]? [0-9]+                        => body unparse n = n ;
+token DECIMAL : string ::= [+-]? [0-9]* '.' [0-9]+             => body unparse n = n ;
+token DOUBLE  : string
+  ::= [+-]? ( [0-9]+ '.' [0-9]* EXPONENT
+            | '.' [0-9]+ EXPONENT
+            | [0-9]+ EXPONENT )                                => body unparse n = n ;
+  /* Values are the verbatim lexical form (lexical fidelity, spec §2):
+   * `0.9` is literal("0.9", xsd:decimal), never a host float. */
+
+token EXPONENT : string ::= [eE] [+-]? [0-9]+ ;                    // fragment
+
+/* ---- strings --------------------------------------------------------
+ * Each carries the unescape/escape iso pair with its quote style;
+ * round-trip obligations on the iso library cover ECHAR/UCHAR corners. */
+
+token STRING_LITERAL_QUOTE : string
+  ::= '"' ([^\u0022\u005C\u000A\u000D] | ECHAR | UCHAR)* '"'
+  => unescapeString(body, dquote)
+  unparse s = '"' escapeString(s, dquote) '"' ;
+
+token STRING_LITERAL_SINGLE_QUOTE : string
+  ::= "'" ([^\u0027\u005C\u000A\u000D] | ECHAR | UCHAR)* "'"
+  => unescapeString(body, squote)
+  unparse s = "'" escapeString(s, squote) "'" ;
+
+token STRING_LITERAL_LONG_QUOTE : string
+  ::= '"""' (('"' | '""')? ([^\u0022\u005C] | ECHAR | UCHAR))* '"""'
+  => unescapeString(body, longDquote)
+  unparse s = '"""' escapeString(s, longDquote) '"""' ;
+
+token STRING_LITERAL_LONG_SINGLE_QUOTE : string
+  ::= "'''" (("'" | "''")? ([^\u0027\u005C] | ECHAR | UCHAR))* "'''"
+  => unescapeString(body, longSquote)
+  unparse s = "'''" escapeString(s, longSquote) "'''" ;
+
+/* ---- shared fragments (W3C rdf12-turtle §Terminals, verbatim) ------ */
+
+token UCHAR : string                                               // fragment
+  ::= '\u' HEX HEX HEX HEX | '\U' HEX HEX HEX HEX HEX HEX HEX HEX ;
+token ECHAR : string ::= '\' [tbnrf"'\\] ;                         // fragment
+token HEX   : string ::= [0-9A-Fa-f] ;                             // fragment
+
+token PN_CHARS_BASE : string                                       // fragment
+  ::= [A-Za-zÀ-ÖØ-öø-˿Ͱ-ͽͿ-῿‌-‍⁰-↏Ⰰ-⿯、-퟿豈-﷏ﷰ-�\U00010000-\U000EFFFF] ;
+token PN_CHARS_U : string ::= PN_CHARS_BASE | '_' ;                // fragment
+token PN_CHARS   : string                                          // fragment
+  ::= PN_CHARS_U | '-' | [0-9·̀-ͯ‿-⁀] ;
+token PN_PREFIX  : string                                          // fragment
+  ::= PN_CHARS_BASE ((PN_CHARS | '.')* PN_CHARS)? ;
+token PN_LOCAL   : string                                          // fragment
+  ::= (PN_CHARS_U | ':' | [0-9] | PLX) ((PN_CHARS | '.' | ':' | PLX)* (PN_CHARS | ':' | PLX))? ;
+token PLX        : string ::= PERCENT | PN_LOCAL_ESC ;             // fragment
+token PERCENT    : string ::= '%' HEX HEX ;                        // fragment
+token PN_LOCAL_ESC : string                                        // fragment
+  ::= '\' [_~.\-!$&'()*+,;=/?#@%] ;
+
+/* ===================================================================
+ * 2. Document structure and directives
+ * =================================================================== */
+
+turtleDoc : graph
+  [emits, gen, reads env.base, reads env.prefixes, reads env.labels, reads env.version,
+   writes env.base, writes env.prefixes, writes env.labels, writes env.version]
+  ::= statement* ;
+
+statement : graph
+  [emits, gen, reads env.base, reads env.prefixes, reads env.labels,
+   writes env.base, writes env.prefixes, writes env.labels, writes env.version]
+  ::= directive
+    | triples '.'
+  ;
+
+directive : unit [reads env.base, writes env.base, writes env.prefixes, writes env.version]
+  ::= prefixID | base | version | sparqlPrefix | sparqlBase | sparqlVersion ;
+
+prefixID : unit [reads env.base, writes env.prefixes]
+  ::= AT_PREFIX ns=PNAME_NS i=IRIREF '.'
+      { env.prefixes := bind(env.prefixes, ns, resolve(env.base, i)) } ;
+
+base : unit [reads env.base, writes env.base]
+  ::= AT_BASE i=IRIREF '.'
+      { env.base := resolve(env.base, i) } ;
+
+version : unit [writes env.version]                                // rdf12
+  ::= AT_VERSION v=versionSpecifier '.'
+      { env.version := some(v) } ;
+  /* Declarative only: constrains the document, emits nothing.
+   * Print reading: env.version set → emit the directive (spec §4.3, verb 5). */
+
+sparqlPrefix : unit [reads env.base, writes env.prefixes]          // no trailing '.'
+  ::= KW_PREFIX ns=PNAME_NS i=IRIREF
+      { env.prefixes := bind(env.prefixes, ns, resolve(env.base, i)) } ;
+
+sparqlBase : unit [reads env.base, writes env.base]
+  ::= KW_BASE i=IRIREF
+      { env.base := resolve(env.base, i) } ;
+
+sparqlVersion : unit [writes env.version]                          // rdf12
+  ::= KW_VERSION v=versionSpecifier
+      { env.version := some(v) } ;
+
+versionSpecifier : string
+  ::= s=STRING_LITERAL_QUOTE        { value = s }
+    | s=STRING_LITERAL_SINGLE_QUOTE { value = s }
+  ;
+
+/* ===================================================================
+ * 3. Triples
+ * =================================================================== */
+
+triples : graph
+  [emits, gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= s=subject predicateObjectList(s)
+    | b=blankNodePropertyList predicateObjectList(b)?
+    | r=reifiedTriple predicateObjectList(r)?
+      /* WD 2026-06-12 makes the pOL optional here: `<< :a :b :c >> .`
+       * asserts only the rdf:reifies triple. */
+  ;
+
+/* W3C: predicateObjectList ::= verb objectList (';' (verb objectList)?)*
+ * — the trailing/repeated-';' shape is kept verbatim rather than using
+ * the `%` sugar, which does not admit empty segments. */
+predicateObjectList(s: subjT) : graph
+  [emits, gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= p=verb objectList(s, p) ( ';' ( p2=verb objectList(s, p2) )? )* ;
+
+objectList(s: subjT, p: iri) : graph
+  [emits, gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= ( o=object { emit s p o } annotation(s, p, o) ) % ',' ;
+  /* The emit fires the instant `o` closes — before any annotation and
+   * before later list members are seen (earliest emission, spec §6). */
+
+verb : term [reads env.base, reads env.prefixes]
+  ::= @prefer(2)                     i=iri { value = i }           // guard-free fallback
+    | @prefer(1) @when(value == rdf:type) 'a'  { value = rdf:type }
+  ;
+
+subject : term!   /* value is a subjT by construction of the alternatives; see NOTE 2 */
+  [emits, gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= i=iri        { value = i }
+    | b=BlankNode  { value = b }
+    | c=collection { value = c }
+  ;
+
+object : term!
+  [emits, gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::=                                          i=iri                       { value = i }
+    |                                          l=literal                   { value = l }
+    | @prefer(4) @covers(obj-bnode-label)      b=BlankNode                 { value = b }
+    | @prefer(1) @when(listShaped(value))
+                 @covers(obj-collection)       c=collection                { value = c }
+    | @prefer(2) @when(freshSingleUse(value))
+                 @covers(obj-bnpl)             bp=blankNodePropertyList    { value = bp }
+    |            @covers(obj-triple-term)      t=tripleTerm                { value = t }  // rdf12
+    | @prefer(3) @when(reifiesQuadPresent(value))
+                 @covers(obj-reified-triple)   r=reifiedTriple             { value = r }  // rdf12
+  ;
+  /* Print discipline: iri / literal / tripleTerm are selected by the
+   * goal term's constructor (disjoint value shapes). For a bnode-valued
+   * goal the prioritized group is: collection sugar, then [ … ] sugar,
+   * then << … >> sugar, then the guard-free `_:label` fallback (L3) —
+   * degrading prettiness, never correctness (spec §4.4, §7). */
+
+/* ===================================================================
+ * 4. Blank nodes, property lists, collections
+ * =================================================================== */
+
+BlankNode : term! [gen, reads env.labels, writes env.labels]
+  ::= @prefer(2) l=BLANK_NODE_LABEL                                // guard-free fallback
+      { let b = lookup(env.labels, l) ?? fresh() ;
+        env.labels := bind(env.labels, l, b) ;
+        value = b }
+      /* Document-scoped label table: every occurrence of `_:x` maps to
+       * the same fresh-allocated bnode; conformance pairs therefore use
+       * the deterministic _:b0, _:b1, … labels (spec §3). */
+    | @prefer(1) @when(freshSingleUse(value)) ANON { value = fresh() }
+  ;
+
+blankNodePropertyList : term!
+  [emits, gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= '[' { fresh b } predicateObjectList(b) ']' { value = b } ;
+  /* fresh-before-descent: quads inside the brackets stream out with
+   * `b` as subject while the enclosing object is still being parsed.
+   * Print: `fresh b` is a linear match — this site prints the bnode's
+   * whole property set or the alternative's guard fails (spec §7). */
+
+collection : term!
+  [emits, gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= '(' inner=collectionBody? ')' { value = inner ?? rdf:nil } ;
+
+collectionBody : term!
+  [emits, gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= o=object
+      { fresh head ; emit head rdf:first o }
+      thread prev : subjT = head in
+      ( o2=object
+        { fresh cell ;
+          emit prev rdf:rest cell ;
+          emit cell rdf:first o2 ;
+          prev := cell }
+      )*
+      { emit prev rdf:rest rdf:nil ; value = head }
+  ;
+  /* Threaded `prev` keeps memory O(depth), not O(list length): each
+   * rdf:first/rdf:rest cell leaves the parser as soon as its element
+   * closes; only the final rdf:rest→rdf:nil waits for ')'. Backward
+   * reading: match head's rdf:first, then follow rdf:rest linearly
+   * until rdf:nil, consuming each cell exactly once. */
+
+/* ===================================================================
+ * 5. Literals
+ * =================================================================== */
+
+literal : term [reads env.base, reads env.prefixes]
+  ::= @prefer(1) n=NumericLiteral { value = n }
+      /* print guard inferred (spec §4.4): datatype ∈ {xsd:integer,
+       * xsd:decimal, xsd:double} ∧ lexical form ∈ that token language */
+    | @prefer(2) b=BooleanLiteral { value = b }
+      /* inferred: datatype = xsd:boolean ∧ lex ∈ {'true','false'} */
+    | @prefer(3) r=RDFLiteral     { value = r }                    // guard-free fallback
+  ;
+
+/* Normative RDF 1.2 rendering, spec/SHUTTLE.md §9: the language-tag /
+ * datatype / plain split is by grammar shape, so `"x"@en^^dt` and
+ * `@ar--rtl^^dt` are unparseable, and rdf:dirLangString arises only
+ * from LANG_DIR carrying a direction. */
+RDFLiteral : term [reads env.base, reads env.prefixes]
+  ::= lex=String
+      ( ld=LANG_DIR   { value = case ld of (l, none)   -> literal(lex, rdf:langString, l)
+                                           (l, some d) -> literal(lex, rdf:dirLangString, l, d) }
+      | '^^' dt=iri   { value = literal(lex, dt) }
+      |               { value = literal(lex, xsd:string) }
+      ) ;
+
+NumericLiteral : term
+  ::= n=INTEGER { value = literal(n, xsd:integer) }
+    | n=DECIMAL { value = literal(n, xsd:decimal) }
+    | n=DOUBLE  { value = literal(n, xsd:double) }
+  ;
+
+BooleanLiteral : term
+  ::= 'true'  { value = literal("true",  xsd:boolean) }
+    | 'false' { value = literal("false", xsd:boolean) }
+  ;
+
+String : string
+  ::= @prefer(1) @when(needsLongQuoting(value))                    // real newlines / quote runs
+                 s=STRING_LITERAL_LONG_QUOTE        { value = s }
+    | @prefer(2) s=STRING_LITERAL_QUOTE             { value = s }  // guard-free fallback: escaping is total
+    | @prefer(3) s=STRING_LITERAL_SINGLE_QUOTE      { value = s }  // parse-only under default policy
+    | @prefer(4) s=STRING_LITERAL_LONG_SINGLE_QUOTE { value = s }
+  ;
+
+/* ===================================================================
+ * 6. IRIs
+ * =================================================================== */
+
+iri : term [reads env.base, reads env.prefixes]
+  ::= @prefer(2) r=IRIREF { value = resolve(env.base, r) }         // guard-free fallback
+    | @prefer(1) @when(abbreviable(env.prefixes, value))
+                 p=PrefixedName { value = p }
+  ;
+
+PrefixedName : term [reads env.prefixes]
+  ::= n=PNAME_LN
+      { require boundPrefix(env.prefixes, fst(n)) else error UNDECLARED_PREFIX ;
+        value = expandPName(env.prefixes, n) }
+    | n=PNAME_NS
+      { require boundPrefix(env.prefixes, n) else error UNDECLARED_PREFIX ;
+        value = expandPName(env.prefixes, (n, "")) }
+  ;
+  /* expandPName/abbreviate is a primitive iso pair (spec §5); the
+   * require clause doubles as the generator hook for the
+   * undeclared-prefix negative tests. */
+
+/* ===================================================================
+ * 7. RDF 1.2: triple terms, reified triples, annotations
+ * (normative rendering of spec/SHUTTLE.md §9, W3C production shapes)
+ * =================================================================== */
+
+tripleTerm : term                                                  // rdf12; pure: inner triple NOT asserted
+  [gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= '<<(' s=ttSubject p=verb o=ttObject ')>>' { value = tt(s, p, o) } ;
+
+ttSubject : term! [gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= i=iri       { value = i }
+    | b=BlankNode { value = b }
+  ;
+
+ttObject : term!                                                   // nests via object only (spec §2)
+  [gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= i=iri        { value = i }
+    | b=BlankNode  { value = b }
+    | l=literal    { value = l }
+    | t=tripleTerm { value = t }
+  ;
+
+reifiedTriple : term!                                              // rdf12; denotes its reifier
+  [emits, gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= '<<' s=rtSubject p=verb o=rtObject r=reifier? '>>'
+      { let rr = r ?? fresh() ;
+        emit rr rdf:reifies tt(s, p, o) ;
+        value = rr } ;
+  /* The emit fires at groundness: a reified triple in SUBJECT position
+   * emits its rdf:reifies quad before the enclosing statement's quads
+   * (see examples/turtle12.md, E6/E7). */
+
+rtSubject : term!
+  [emits, gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= i=iri           { value = i }
+    | b=BlankNode     { value = b }
+    | r=reifiedTriple { value = r }
+  ;
+
+rtObject : term!
+  [emits, gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= i=iri           { value = i }
+    | b=BlankNode     { value = b }
+    | l=literal       { value = l }
+    | t=tripleTerm    { value = t }
+    | r=reifiedTriple { value = r }
+  ;
+
+reifier : term! [gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= '~' e=(iri | BlankNode)?
+      { value = e ?? fresh() } ;
+
+/* The pending-reifier rule, as a threaded local whose scope is exactly
+ * the repetition — `pend` cannot leak into the next statement, `~ :r
+ * {| … |}` reuses :r with no second reifies quad, and consecutive bare
+ * {| … |} blocks mint distinct fresh reifiers. Coverage of this
+ * production's alternatives is what exposed the three hand-written-
+ * parser failures cited in spec §8. */
+annotation(s: subjT, p: iri, o: term) : graph                      // rdf12
+  [emits, gen, reads env.base, reads env.prefixes, reads env.labels, writes env.labels]
+  ::= thread pend : subjT? = none in
+      (   r=reifier          { emit r rdf:reifies tt(s, p, o) ; pend := some(r) }
+        | '{|'               { let a = pend ?? { fresh f ;
+                                                 emit f rdf:reifies tt(s, p, o) ; f } }
+          predicateObjectList(a)
+          '|}'               { pend := none }
+      )*
+  print { prefer sugar when residual has (s, p, o) consumed
+          and ?r rdf:reifies tt(s, p, o) present ;
+          fallback : plain statements ; } ;
+
+/* ===================================================================
+ * NOTES — meta-language gaps surfaced by this grammar (v0.1 feedback)
+ *
+ * NOTE 1 (skip tokens): shuttle.ebnf has no way to mark WS/COMMENT as
+ *   skip tokens for the OBJECT language (§5 only exempts the meta-
+ *   language's own whitespace). Proposal: a header clause
+ *   `skip WS, COMMENT ;`. This file assumes that reading.
+ *
+ * NOTE 2 (refined semTypes): `subject`, `collection`, `BlankNode` etc.
+ *   synthesize a subjT, but semType only offers `term!` for
+ *   value+emissions — scalar semTypes cannot take `!`. The emit-
+ *   argument typing (spec §2) still rejects misuse downstream;
+ *   proposal: allow `T !` for any term-algebra subtype T.
+ *
+ * NOTE 3 (profile gating): `profile` is a header flag but there is no
+ *   per-alternative gate, so turtle11 cannot yet be carved out of this
+ *   file mechanically. Proposal: an `@profile(...)` alternative
+ *   annotation; the `// rdf12` comments in this file mark exactly the
+ *   alternatives/tokens it would gate. See grammars/turtle11.shuttle.
+ *
+ * NOTE 4 (print-guard vocabulary): guards `listShaped`,
+ *   `freshSingleUse`, `reifiesQuadPresent`, `needsLongQuoting`,
+ *   `abbreviable` are written in the loose v0.1 style pending the Q4
+ *   policy-vocabulary tightening (spec §10). Each is decidable from
+ *   the residual/window indexes the compiler derives (spec §7).
+ * =================================================================== */

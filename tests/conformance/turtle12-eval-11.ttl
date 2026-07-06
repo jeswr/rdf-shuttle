@@ -1,0 +1,7 @@
+@prefix ex: <http://example.org/> .
+ex:s ex:single 'single quoted' ;
+     ex:escaped "line1\nline2\ttabbed \"quoted\"" ;
+     ex:long """multi
+line""" ;
+     ex:longSingle '''it's fine''' ;
+     ex:unicode "caf\u00E9" .

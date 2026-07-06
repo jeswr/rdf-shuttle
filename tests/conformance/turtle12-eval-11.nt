@@ -1,0 +1,5 @@
+<http://example.org/s> <http://example.org/single> "single quoted" .
+<http://example.org/s> <http://example.org/escaped> "line1\nline2\ttabbed \"quoted\"" .
+<http://example.org/s> <http://example.org/long> "multi\nline" .
+<http://example.org/s> <http://example.org/longSingle> "it's fine" .
+<http://example.org/s> <http://example.org/unicode> "café" .
