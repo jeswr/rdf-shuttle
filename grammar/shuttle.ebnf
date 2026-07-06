@@ -1,0 +1,203 @@
+/* ===================================================================
+ * Shuttle meta-language grammar, v0.1
+ *
+ * Notation: W3C EBNF (as used in the XML and RDF specifications,
+ * https://www.w3.org/TR/xml/#sec-notation).
+ *   A ::= e        production
+ *   'x'            literal string (case-sensitive)
+ *   [a-z]          character class
+ *   e? e* e+       optional / zero-or-more / one-or-more
+ *   e1 | e2        unordered alternatives
+ *   e1 - e2        e1 but not e2
+ *
+ * Comments (`//` to end of line, `/* ... * /` nestable) and whitespace
+ * may appear between any two tokens and are not shown in the grammar.
+ *
+ * This EBNF is the hand-written bootstrap description of the Shuttle
+ * meta-language. Self-hosting — rewriting this file as a Shuttle
+ * grammar whose emitted "quads" are the .shu AST — is the v1 exit
+ * criterion (spec/SHUTTLE.md §10, Q7).
+ * =================================================================== */
+
+/* ---- 1. File structure ------------------------------------------- */
+
+shuFile        ::= header envBlock? oracleDecl* tokenRule* production+ policyBlock*
+
+header         ::= grammarDecl headerClause*
+grammarDecl    ::= 'grammar' NAME ';'
+headerClause   ::= 'target' NAME ';'
+                 | 'spec-ref' STRING ';'                 /* mandatory pin: W3C doc + WD date */
+                 | 'start' NAME ';'
+                 | 'emits' ('triples' | 'quads') 'bag'? ';'
+                 | 'profile' NAME ';'
+                 | 'import' NAME ';'
+
+/* ---- 2. Environment ---------------------------------------------- */
+
+envBlock       ::= 'env' '{' envDecl* '}'
+envDecl        ::= NAME ':' envType ('=' expr)? ';'
+envType        ::= 'scoped'? typeExpr
+
+/* ---- 3. Oracle declarations --------------------------------------- */
+
+oracleDecl     ::= '@oracle' NAME '(' typeList? ')' ';'
+typeList       ::= typeExpr (',' typeExpr)*
+
+/* ---- 4. Types ------------------------------------------------------ */
+
+typeExpr       ::= baseType '?'?
+baseType       ::= 'iri' | 'bnode' | 'subjT' | 'graphT' | 'term'
+                 | 'string' | 'int' | 'bool' | 'dir' | 'unit'
+                 | 'map' '<' typeExpr ',' typeExpr '>'
+                 | '(' typeExpr (',' typeExpr)+ ')'      /* tuple */
+                 | NAME                                   /* declared/imported type */
+
+/* ---- 5. Token rules ------------------------------------------------ */
+
+tokenRule      ::= 'token' TOKENNAME ':' typeExpr tokenAnnot*
+                   '::=' tokenRegex
+                   ('=>' expr)?                           /* value transducer (fwd) */
+                   ('unparse' pattern '=' expr)?          /* value transducer (bwd) */
+                   ';'
+tokenAnnot     ::= '@lossy' '(' NAME ')'                  /* names the canonicalizer */
+
+/* Token bodies are strictly regular; longest-match/maximal-munch
+ * resolves overlaps ('<' vs '<<' vs '<<(' etc.). */
+tokenRegex     ::= tokenAlt ('|' tokenAlt)*
+tokenAlt       ::= tokenFactor+
+tokenFactor    ::= tokenPrim ('?' | '*' | '+')?
+tokenPrim      ::= STRING                                 /* quoted literal */
+                 | charClass
+                 | TOKENNAME                              /* regular refs only: no recursion */
+                 | '(' tokenRegex ')'
+charClass      ::= '[' '^'? (charRange | charSingle)+ ']'
+charRange      ::= charSingle '-' charSingle
+charSingle     ::= CHAR | ESCAPEDCHAR | UNICODEESC
+
+/* ---- 6. Productions ------------------------------------------------ */
+
+production     ::= NAME params? ':' semType effectRow? prodAnnot*
+                   '::=' alternatives printDirective? ';'
+
+params         ::= '(' param (',' param)* ')'
+param          ::= NAME ':' typeExpr
+
+semType        ::= 'term' '!'?                            /* term = pure value; term! = value + emissions */
+                 | 'graph'                                /* emissions only */
+                 | 'unit'
+                 | typeExpr                               /* scalar result */
+
+effectRow      ::= '[' effect (',' effect)* ']'
+effect         ::= 'emits' | 'gen'
+                 | 'reads'  'env' '.' NAME
+                 | 'writes' 'env' '.' NAME
+
+prodAnnot      ::= '@buffered'
+                 | '@maxdepth' '(' INT ')'
+                 | '@native' '(' ('js' | 'rust') ')' NATIVEBLOCK
+                   /* forfeits invertibility + oracle status for this rule */
+
+/* ---- 7. Right-hand sides ------------------------------------------- */
+
+alternatives   ::= alternative ('|' alternative)*
+alternative    ::= altAnnot* item*
+
+altAnnot       ::= '@prefer' '(' INT ')'
+                 | '@when'   '(' expr ')'
+                 | '@covers' '(' NAME ')'
+
+item           ::= factor
+                 | semBlock                               /* { clause ; ... } at this point */
+                 | threadExpr
+
+factor         ::= (NAME '=')? primary ('?' | '*' | '+' | '%' STRING)?
+                   /* NAME '='   : binding
+                      '%' STRING : one-or-more separated by the terminal */
+
+primary        ::= STRING                                 /* quoted terminal */
+                 | TOKENNAME
+                 | NAME ('(' argList? ')')?               /* nonterminal call; omitted args auto-copy */
+                 | '(' alternatives ')'
+
+argList        ::= expr (',' expr)*
+
+threadExpr     ::= 'thread' NAME ':' typeExpr '=' expr 'in'
+                   '(' alternatives ')' ('*' | '+')
+
+/* ---- 8. Semantic blocks: the seven clause forms -------------------- */
+
+semBlock       ::= '{' clause (';' clause)* ';'? '}'
+
+clause         ::= 'value' '=' expr                                       /* 1 */
+                 | 'emit' expr expr expr ('@' expr)? ('when' expr)?       /* 2 */
+                 | 'fresh' NAME                                           /* 3 */
+                 | 'let' NAME '=' expr                                    /* 4: '??' via coalExpr */
+                 | 'env' '.' NAME ':=' expr                               /* 5 */
+                 | 'require' expr 'else' 'error' NAME                     /* 6 */
+                 | 'oracle' NAME '(' argList? ')' '->' clause
+                     (';' 'otherwise' '->' clause)?                       /* 7 */
+                 | NAME ':=' expr                         /* threaded-local update */
+
+/* ---- 9. Expressions ------------------------------------------------ */
+
+expr           ::= caseExpr
+caseExpr       ::= 'case' expr 'of' caseArm+
+                 | condExpr
+caseArm        ::= pattern '->' expr
+condExpr       ::= coalExpr ('?' expr ':' expr)?
+coalExpr       ::= orExpr ('??' orExpr)?
+                   /* e ?? d — parse: value of e, or d when e is none/absent;
+                    * print: invert e, and when the source quad is absent, d */
+orExpr         ::= andExpr ('||' andExpr)*
+andExpr        ::= cmpExpr ('&&' cmpExpr)*
+cmpExpr        ::= addExpr (('==' | '!=' | '<' | '<=' | '>' | '>=') addExpr)?
+addExpr        ::= applyExpr (('+' | '-') applyExpr)*
+applyExpr      ::= atom ('(' argList? ')')?
+atom           ::= NAME                                   /* binding, param, thread, iso, constructor */
+                 | 'env' '.' NAME
+                 | 'fresh' '(' ')'                        /* anonymous fresh bnode (expression form) */
+                 | 'some' '(' expr ')' | 'none'
+                 | '*'                                    /* unbounded sentinel (e.g. maxCount) */
+                 | PNAME                                  /* e.g. rdf:reifies, sh:path (curie constant) */
+                 | IRIREF                                 /* e.g. <http://...> */
+                 | STRING | INT
+                 | '(' expr (',' expr)* ')'               /* grouping / tuple */
+                 | blockExpr
+blockExpr      ::= '{' clause (';' clause)* ';' expr '}'  /* clauses, then result value */
+
+pattern        ::= NAME
+                 | '_'
+                 | 'some' pattern | 'none'
+                 | '(' pattern (',' pattern)* ')'
+                 | NAME '(' pattern (',' pattern)* ')'    /* constructor pattern */
+
+/* ---- 10. Print directives and policies ----------------------------- */
+
+/* The print-hint expression sublanguage is deliberately small; some v0.1
+ * examples state guards in readable prose inside `print { }` — those are to
+ * be tightened together with the policy vocabulary (spec §10, Q4). */
+printDirective ::= 'print' ( '{' printHint* '}'
+                           | 'fallback' NAME )            /* delegate residual to a named production */
+printHint      ::= NAME '=' expr ';'                      /* e.g. mn = lookup(ps, sh:minCount) ?? 0 ; */
+                 | 'prefer' NAME 'when' expr ';'
+                 | 'fallback' ':' expr ';'
+
+policyBlock    ::= 'policy' NAME '{' policyDecl* '}'
+policyDecl     ::= ('order' | 'group' | 'prefixes' | 'directives' | 'layout')
+                   NAME* '=' expr ';'
+                   /* fixed declarative vocabulary; no user-defined functions
+                    * (spec/SHUTTLE.md §10, Q4) */
+
+/* ---- 11. Terminals -------------------------------------------------- */
+
+NAME           ::= [a-zA-Z] [a-zA-Z0-9_-]*                /* lowerCamel by convention */
+TOKENNAME      ::= [A-Z] [A-Z0-9_]*                       /* ALL_CAPS: token reference */
+PNAME          ::= NAME ':' [a-zA-Z0-9_.-]*               /* curie constant in expressions */
+IRIREF         ::= '<' (CHAR - [<>"{}|^`\])* '>'
+STRING         ::= "'" (CHAR - "'")* "'" | '"' (CHAR - '"')* '"'
+INT            ::= [0-9]+
+CHAR           ::= /* any Unicode scalar value */
+ESCAPEDCHAR    ::= '\' [nrtbf'"\\-\[\]]
+UNICODEESC     ::= '\u' HEX HEX HEX HEX | '\U' HEX HEX HEX HEX HEX HEX HEX HEX
+HEX            ::= [0-9a-fA-F]
+NATIVEBLOCK    ::= '{' /* host-language text, brace-balanced */ '}'
