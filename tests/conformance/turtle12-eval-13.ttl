@@ -1,0 +1,3 @@
+@prefix ex: <http://example.org/> .
+ex:s ex:says "مرحبا"@ar--rtl .
+ex:s ex:greets "hello"@en--ltr .

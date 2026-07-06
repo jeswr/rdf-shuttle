@@ -1,0 +1,2 @@
+<http://example.org/dir/a> <http://example.org/dir/#frag> <http://example.org/root> .
+<http://example.org/dir/b> <http://example.org/up> <http://other.example/x> .

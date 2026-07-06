@@ -1,0 +1,68 @@
+/* ===================================================================
+ * turtle11.shuttle — Turtle 1.1 (RDF 1.1) as a profile of turtle12
+ *
+ * Turtle 1.1 is a CLEAN SUBSET of the turtle12 grammar: every RDF 1.2
+ * construct is a whole alternative, whole production, or a suffix of
+ * one token — nothing in the 1.1 language changes shape. It is
+ * therefore expressed as a profile of grammars/turtle12.shuttle
+ * rather than a second 500-line file that could drift (drift between
+ * near-identical specifications being exactly the disease Shuttle
+ * exists to cure).
+ *
+ * Shuttle v0.1 has a header-level `profile` flag but no
+ * per-alternative gate yet (turtle12.shuttle, NOTE 3). Until the
+ * proposed `@profile(...)` annotation lands in the meta-language,
+ * this file is the normative statement of WHAT the profile removes;
+ * the `// rdf12` markers in turtle12.shuttle identify every gated
+ * site mechanically.
+ * =================================================================== */
+
+grammar turtle11 ;
+target rdf-1.1 ;
+spec-ref "RDF 1.1 Turtle, W3C Recommendation 25 February 2014, https://www.w3.org/TR/2014/REC-turtle-20140225/" ;
+start turtleDoc ;
+emits triples ;
+profile turtle-1.1 ;
+import turtle12 ;
+
+/* -------------------------------------------------------------------
+ * The profile gates exactly the following, i.e. every site marked
+ * `// rdf12` in turtle12.shuttle:
+ *
+ * Tokens
+ *   - AT_VERSION, KW_VERSION            (dropped)
+ *   - LANG_DIR                          (restricted to the RDF 1.1
+ *       LANGTAG language: the ('--' ('ltr'|'rtl'))? suffix is removed,
+ *       so the token value is (lang, none) always and
+ *       rdf:dirLangString becomes unreachable by construction)
+ *
+ * Productions (dropped whole)
+ *   - version, sparqlVersion            (and their `directive` alts)
+ *   - tripleTerm, ttSubject, ttObject
+ *   - reifiedTriple, rtSubject, rtObject, reifier
+ *   - annotation
+ *
+ * Alternatives (dropped from surviving productions)
+ *   - triples:    `r=reifiedTriple predicateObjectList(r)?`
+ *   - object:     the tripleTerm and reifiedTriple alternatives
+ *   - objectList: the `annotation(s, p, o)` call site
+ *       (annotation derives ε in 1.2 only via its Kleene star, so
+ *        removing the call leaves the emitted language unchanged for
+ *        all 1.1 documents)
+ *
+ * Environment
+ *   - env.version                       (dropped; nothing writes it)
+ *
+ * Everything else — directives, triples, predicateObjectList,
+ * objectList emission, collections, blankNodePropertyList, all
+ * literal and string forms, prefixed names, blank-node label scoping,
+ * the print preference groups and their L3 fallbacks — is shared with
+ * turtle12 verbatim, so the two grammars cannot disagree on the
+ * common language.
+ *
+ * Conformance consequence: every pair in tests/conformance/ whose
+ * manifest entry is NOT tagged rdf12 is also a valid oracle pair for
+ * this profile; the rdf12-tagged inputs become negative-syntax cases
+ * here (their first 1.2-only token is provably outside the 1.1 LL
+ * tables — the spec §8 mutant construction applies).
+ * ------------------------------------------------------------------- */

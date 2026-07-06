@@ -1,0 +1,6 @@
+@prefix ex: <http://example.org/> .
+ex:s ex:integer 42 ;
+     ex:negative -7 ;
+     ex:decimal 0.9 ;
+     ex:double 1.2e3 ;
+     ex:leadingDot .5 .

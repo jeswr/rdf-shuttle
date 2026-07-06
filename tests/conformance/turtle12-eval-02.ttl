@@ -1,0 +1,3 @@
+@base <http://example.org/dir/> .
+<a> <#frag> </root> .
+<b> <../up> <//other.example/x> .

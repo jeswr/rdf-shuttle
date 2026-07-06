@@ -65,6 +65,9 @@ not a runtime check.
 | [`grammar/shuttle.ebnf`](grammar/shuttle.ebnf) | the grammar of the Shuttle meta-language itself (W3C EBNF) |
 | [`examples/turtle12.md`](examples/turtle12.md) | Turtle 1.2 worked example — all four RDF 1.2 surface features, exact emission stream, print direction |
 | [`examples/shacl-compact.md`](examples/shacl-compact.md) | SHACL Compact Syntax worked example — oracles, conditional-emit inversion, print partiality as an expressibility decision procedure |
+| [`grammars/turtle12.shuttle`](grammars/turtle12.shuttle) | Turtle 1.2, the first full grammar in the formalism — all directives, literal forms incl. `rdf:dirLangString`, collections, property lists, triple terms, reified triples, annotation blocks, with triple-generating semantics |
+| [`grammars/turtle11.shuttle`](grammars/turtle11.shuttle) | Turtle 1.1 as a declared profile (clean subset) of `turtle12` |
+| [`tests/conformance/`](tests/conformance) | hand-authored (Turtle, expected N-Triples) oracle pairs + W3C-format `manifest.ttl` — the fixed point generate mode is calibrated against |
 
 ## Status
 

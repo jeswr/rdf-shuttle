@@ -1,0 +1,2 @@
+_:b0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example.org/a> <http://example.org/b> <http://example.org/c> )>> .
+_:b0 <http://example.org/certainty> "0.5"^^<http://www.w3.org/2001/XMLSchema#decimal> .
