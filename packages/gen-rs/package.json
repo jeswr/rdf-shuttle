@@ -1,0 +1,17 @@
+{
+  "name": "@rdf-shuttle/gen-rs",
+  "version": "0.1.0",
+  "description": "Shuttle Rust backend: emits a dependency-free streaming parser + serializer .rs module from a .shuttle grammar",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "shuttle-gen-rs": "src/cli.js"
+  },
+  "exports": {
+    ".": "./src/generate.js"
+  },
+  "scripts": {
+    "generate": "node src/cli.js ../../grammars/turtle12.shuttle -o generated/turtle12.rs",
+    "test": "npm run generate && node test/gen.test.js"
+  }
+}

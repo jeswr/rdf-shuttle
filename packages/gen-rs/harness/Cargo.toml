@@ -1,0 +1,16 @@
+# Conformance + bench harness for the gen-rs artifact (dev-only tooling;
+# the generated module itself has zero dependencies).
+[package]
+name = "shuttle-rs-harness"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.87"
+publish = false
+
+[workspace]
+
+[dependencies]
+
+[profile.release]
+lto = true
+codegen-units = 1
