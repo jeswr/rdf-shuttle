@@ -29,6 +29,12 @@ passed as `options.baseIRI`).
 - The `rdf12/` surface syntax is INVENTED here (the W3C shacl12-cs ED has no
   RDF 1.2 surface yet) and is pinned in the grammar header for coordination
   with [jeswr/shaclc-1.2](https://github.com/jeswr/shaclc-1.2).
+- Every pair is also a PRINT obligation: parse∘print∘parse ≅ parse (valid +
+  rdf12 on both artifacts, extended on the extended artifact — its
+  annotation / `% … %` / trailing-turtle layers are the declared guard-free
+  fallbacks). The strict artifact instead yields a RESIDUAL VERDICT on the
+  `leak-*` graphs: printing is partial by construction where the profile has
+  no fallback (spec §8).
 - Deviations from shaclc-js (all documented in the grammar header, D1–D5):
   case-sensitive keywords, property-only `% … %` attachment, nested bodies
   composing with `|`/`!`, verbatim DOUBLE lexical forms, directive ordering.

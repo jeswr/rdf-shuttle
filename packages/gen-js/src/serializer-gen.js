@@ -51,55 +51,11 @@ function curieIri(e) {
   return NS[e.prefix] + e.local;
 }
 
-export function genSerializer(g, an, makeStandaloneMatchers) {
-  const need = (name) => {
-    const p = g.prodByName.get(name);
-    if (!p) throw new Error(`serializer: production ${name} missing`);
-    return p;
-  };
-
-  /* ---- extract concrete syntax carriers from the grammar ---- */
-
-  // objectList: `( … ) % ','`
-  const olSepItem = findItem(need('objectList'), (it) => it.kind === 'factor' && it.postfix === 'sepList');
-  const olSep = olSepItem ? olSepItem.sep : ',';
-  // predicateObjectList: star group starting with a literal (';')
-  const polStar = findItem(need('predicateObjectList'), (it) =>
-    it.kind === 'factor' && it.postfix === 'star' && it.prim.kind === 'group');
-  const polSep = polStar ? polStar.prim.alts[0].items[0].prim.text : ';';
-  // statement: `triples '.'`
-  const stmtAlt = need('statement').alts.find((a) => a.items.some((i) => i.kind === 'factor' && i.prim.kind === 'lit'));
-  const stmtTerm = stmtAlt ? stmtAlt.items.find((i) => i.prim && i.prim.kind === 'lit').prim.text : '.';
-  // verb: literal alternative + its constant (rdf:type -> 'a')
-  const verbProd = need('verb');
-  let typeKw = null;
-  let typeIri = null;
-  for (const a of verbProd.alts) {
-    const lit = a.items.find((i) => i.kind === 'factor' && i.prim.kind === 'lit');
-    const sem = a.items.find((i) => i.kind === 'sem');
-    if (lit && sem) {
-      const v = sem.clauses.find((c) => c.k === 'value');
-      if (v && v.expr.k === 'curie') { typeKw = lit.prim.text; typeIri = curieIri(v.expr); }
-    }
-  }
-  // tripleTerm delimiters
-  const ttProd = g.prodByName.get('tripleTerm');
-  let ttOpen = '<<(';
-  let ttClose = ')>>';
-  if (ttProd) {
-    const lits = ttProd.alts[0].items.filter((i) => i.kind === 'factor' && i.prim.kind === 'lit');
-    if (lits.length >= 2) { ttOpen = lits[0].prim.text; ttClose = lits[lits.length - 1].prim.text; }
-  }
-  // @prefix directive keyword (from the AT_PREFIX token pattern)
-  let prefixKw = '@prefix';
-  const pid = g.prodByName.get('prefixID');
-  if (pid) {
-    const tokItem = pid.alts[0].items.find((i) => i.kind === 'factor' && i.prim.kind === 'token');
-    const tok = tokItem && g.tokenByName.get(tokItem.prim.name);
-    if (tok && tok.pattern.k === 'lit') prefixKw = tok.pattern.text;
-  }
-
-  // NumericLiteral: token -> datatype mapping in @prefer order of `literal`
+/**
+ * NumericLiteral: token -> datatype mapping in the @prefer order of
+ * `literal` (shared with the residual serializer).
+ */
+export function deriveNumericCases(g) {
   const numCases = [];
   const numProd = g.prodByName.get('NumericLiteral');
   if (numProd) {
@@ -112,29 +68,29 @@ export function genSerializer(g, an, makeStandaloneMatchers) {
       }
     }
   }
-  // BooleanLiteral: lexical forms + datatype
-  let boolInfo = null;
+  return numCases;
+}
+
+/** BooleanLiteral: lexical forms + datatype (shared). */
+export function deriveBooleanInfo(g) {
   const boolProd = g.prodByName.get('BooleanLiteral');
-  if (boolProd) {
-    const lexes = [];
-    let dt = null;
-    for (const a of boolProd.alts) {
-      const lit = a.items.find((i) => i.kind === 'factor' && i.prim.kind === 'lit');
-      const sem = a.items.find((i) => i.kind === 'sem');
-      const v = sem && sem.clauses.find((c) => c.k === 'value');
-      if (lit && v) { lexes.push(lit.prim.text); dt = curieIri(v.expr.args[1]); }
-    }
-    if (dt) boolInfo = { lexes, dt };
+  if (!boolProd) return null;
+  const lexes = [];
+  let dt = null;
+  for (const a of boolProd.alts) {
+    const lit = a.items.find((i) => i.kind === 'factor' && i.prim.kind === 'lit');
+    const sem = a.items.find((i) => i.kind === 'sem');
+    const v = sem && sem.clauses.find((c) => c.k === 'value');
+    if (lit && v) { lexes.push(lit.prim.text); dt = curieIri(v.expr.args[1]); }
   }
+  return dt ? { lexes, dt } : null;
+}
 
-  /* ---- full-match guards from token patterns ---- */
-
-  const fmTokens = [...new Set([...numCases.map((c) => c.token), 'PN_PREFIX', 'BLANK_NODE_LABEL'])]
-    .filter((t) => g.tokenByName.has(t));
-  const fmCode = makeStandaloneMatchers(fmTokens);
-
-  /* ---- PN_LOCAL charsets for prefixed-name locals ---- */
-
+/**
+ * PN_LOCAL escaping/validation derived from the grammar's PN_LOCAL /
+ * PN_LOCAL_ESC charsets (shared): emits `escLocal(s) -> string|null`.
+ */
+export function derivePnLocalCode(g) {
   let pnLocalCode = 'function escLocal(s) { return null; }';
   const pnl = g.tokenByName.get('PN_LOCAL');
   if (pnl && pnl.pattern.k === 'seq') {
@@ -198,6 +154,71 @@ function escLocal(s) {
   return out;
 }`;
   }
+  return pnLocalCode;
+}
+
+export function genSerializer(g, an, makeStandaloneMatchers) {
+  const need = (name) => {
+    const p = g.prodByName.get(name);
+    if (!p) throw new Error(`serializer: production ${name} missing`);
+    return p;
+  };
+
+  /* ---- extract concrete syntax carriers from the grammar ---- */
+
+  // objectList: `( … ) % ','`
+  const olSepItem = findItem(need('objectList'), (it) => it.kind === 'factor' && it.postfix === 'sepList');
+  const olSep = olSepItem ? olSepItem.sep : ',';
+  // predicateObjectList: star group starting with a literal (';')
+  const polStar = findItem(need('predicateObjectList'), (it) =>
+    it.kind === 'factor' && it.postfix === 'star' && it.prim.kind === 'group');
+  const polSep = polStar ? polStar.prim.alts[0].items[0].prim.text : ';';
+  // statement: `triples '.'`
+  const stmtAlt = need('statement').alts.find((a) => a.items.some((i) => i.kind === 'factor' && i.prim.kind === 'lit'));
+  const stmtTerm = stmtAlt ? stmtAlt.items.find((i) => i.prim && i.prim.kind === 'lit').prim.text : '.';
+  // verb: literal alternative + its constant (rdf:type -> 'a')
+  const verbProd = need('verb');
+  let typeKw = null;
+  let typeIri = null;
+  for (const a of verbProd.alts) {
+    const lit = a.items.find((i) => i.kind === 'factor' && i.prim.kind === 'lit');
+    const sem = a.items.find((i) => i.kind === 'sem');
+    if (lit && sem) {
+      const v = sem.clauses.find((c) => c.k === 'value');
+      if (v && v.expr.k === 'curie') { typeKw = lit.prim.text; typeIri = curieIri(v.expr); }
+    }
+  }
+  // tripleTerm delimiters
+  const ttProd = g.prodByName.get('tripleTerm');
+  let ttOpen = '<<(';
+  let ttClose = ')>>';
+  if (ttProd) {
+    const lits = ttProd.alts[0].items.filter((i) => i.kind === 'factor' && i.prim.kind === 'lit');
+    if (lits.length >= 2) { ttOpen = lits[0].prim.text; ttClose = lits[lits.length - 1].prim.text; }
+  }
+  // @prefix directive keyword (from the AT_PREFIX token pattern)
+  let prefixKw = '@prefix';
+  const pid = g.prodByName.get('prefixID');
+  if (pid) {
+    const tokItem = pid.alts[0].items.find((i) => i.kind === 'factor' && i.prim.kind === 'token');
+    const tok = tokItem && g.tokenByName.get(tokItem.prim.name);
+    if (tok && tok.pattern.k === 'lit') prefixKw = tok.pattern.text;
+  }
+
+  // NumericLiteral: token -> datatype mapping in @prefer order of `literal`
+  const numCases = deriveNumericCases(g);
+  // BooleanLiteral: lexical forms + datatype
+  const boolInfo = deriveBooleanInfo(g);
+
+  /* ---- full-match guards from token patterns ---- */
+
+  const fmTokens = [...new Set([...numCases.map((c) => c.token), 'PN_PREFIX', 'BLANK_NODE_LABEL'])]
+    .filter((t) => g.tokenByName.has(t));
+  const fmCode = makeStandaloneMatchers(fmTokens);
+
+  /* ---- PN_LOCAL charsets for prefixed-name locals (shared) ---- */
+
+  const pnLocalCode = derivePnLocalCode(g);
 
   const XSD_STRING = 'http://www.w3.org/2001/XMLSchema#string';
 

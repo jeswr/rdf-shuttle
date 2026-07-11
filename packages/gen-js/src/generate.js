@@ -11,6 +11,7 @@ import { parseGrammar } from './meta.js';
 import { analyzeTokens, genLexer, genStandaloneMatchers } from './lexer-gen.js';
 import { ParserGen } from './parser-gen.js';
 import { genSerializer } from './serializer-gen.js';
+import { genResidualSerializer } from './residual-serializer-gen.js';
 import { curieTable, curieIriOf } from './clausec.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -66,19 +67,22 @@ export function generateModule(grammarText, grammarFile, options = {}) {
   const pg = new ParserGen(g, an, lex, gen);
   const parserOut = pg.generate();
 
-  // the print mode is derivable only for grammars carrying the Turtle
-  // statement spine; other grammars (SHACL-C) get an honest parse-only
-  // artifact until the residual-consumption serializer lands (spec §7).
+  // print-mode selection: grammars carrying the Turtle statement spine get
+  // the stream-pretty serializer; the shaclc profile gets the batch
+  // residual-consumption printer (spec §8 — print fails with the residual
+  // as the "not compact-expressible" verdict); anything else is an honest
+  // parse-only artifact.
   const TURTLE_SPINE = ['statement', 'predicateObjectList', 'objectList', 'verb'];
   const hasSpine = TURTLE_SPINE.every((n) => g.prodByName.has(n));
   const ser = hasSpine
     ? genSerializer(g, an, (tokens) => genStandaloneMatchers(g, an, tokens))
-    : { code: `
+    : g.headers.profile === 'shaclc'
+      ? genResidualSerializer(g, an, (tokens) => genStandaloneMatchers(g, an, tokens), gen)
+      : { code: `
 /* ==================================================================
  * Print mode: NOT derivable for this grammar by the v0.1 backend (the
- * serializer generator reads the Turtle statement spine). The derived
- * residual-consumption printer — whose failure residual is the
- * "not compact-expressible" verdict — is tracked upstream.
+ * serializer generator reads the Turtle statement spine or the shaclc
+ * residual-consumption profile).
  * ================================================================== */
 export function createWriter() { throw new Error('${g.name}: print mode not generated (v0.1 backend limitation)'); }
 export function writeQuads() { throw new Error('${g.name}: print mode not generated (v0.1 backend limitation)'); }

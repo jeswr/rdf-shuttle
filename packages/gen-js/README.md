@@ -75,13 +75,28 @@ direct-vs-`sh:or`-list one nonterminal late), and **@profile layers**
 validated by graph isomorphism over its vendored fixture corpus plus new
 RDF 1.2 pairs (`tests/conformance/shaclc/`, see its README).
 
-Honest scope: the artifact is **parse-only** — the serializer generator
-below reads the Turtle statement spine and cannot yet derive the
-residual-consumption printer SHACL-C needs (`examples/shacl-compact.md`
-§print); `writeQuads`/`createWriter` throw with a clear message. The derived
-printer (whose non-empty residual is the "not SHACL-C-expressible" verdict)
-is the tracked next step. The push parser degrades to whole-buffer parsing
-(the start production is document-shaped, not a statement star).
+The print direction is the **residual-consumption serializer**
+(`residual-serializer-gen.js`, spec §8): printing starts with the whole
+graph as a residual, each construct consumes the quads it re-emits on
+parse, and print succeeds iff the residual empties. `writeQuads` throws
+`ShuttleResidualError` (carrying the unconsumed quads) when the graph is
+not compact-expressible; `printWithResidual` returns the same verdict
+non-throwing. The three showpieces of `examples/shacl-compact.md` hold:
+the oracle is discharged by the consumed quad's predicate (never run
+backward — `sh:class xsd:string` prints as `class=xsd:string`, never as a
+bare IRI), the `print { … ?? d }` defaults invert conditional emission
+(`[0..1]` regenerates from a lone `sh:maxCount`, while an explicit
+`sh:minCount 0` — which the parse-side `when` guard would suppress — is
+refused into the residual instead of drifting), and in strict builds the
+extended fallback layers (`; …` annotations, `% … %` escapes, trailing
+turtle) do not exist, so graphs needing them get a residual verdict by
+construction. Honest scope: the grammar's stated data (keyword/IRI tables,
+oracle registry, emitted vocabulary, print defaults, punctuation, lexical
+guards, profile-gated layers) is extracted from the AST; the consumption
+skeleton is the backend's built-in print-mode reading of the shaclc
+production shapes, not yet a generic inversion of arbitrary clause bodies.
+The push parser degrades to whole-buffer parsing (the start production is
+document-shaped, not a statement star).
 
 ## Conformance
 
@@ -93,8 +108,12 @@ and negative cases (undeclared prefix → `UNDECLARED_PREFIX`, `"x"@prefix`
 keyword tie). `test/shaclc.test.js` runs the SHACL-CS corpus: the 44 valid
 pairs against BOTH artifacts, the 14 extended pairs (extended accepts ≅
 oracle, strict rejects — including the two strict-mode-leak cases), the 8
-rdf12 pairs, the negative set, push-parser agreement, and baseIRI
-resolution. Status: **234/234 across both suites.**
+rdf12 pairs, the negative set, push-parser agreement, baseIRI resolution,
+and the print direction: parse∘print∘parse ≅ parse over the full corpus
+(valid + rdf12 on both artifacts, extended on the extended artifact),
+residual verdicts (strict-leak graphs, sh:sparql, guard-suppressed
+sh:minCount 0, shared blank nodes, missing document-ontology quad), and
+the two oracle showpieces. Status: **362/362 across both suites.**
 
 ## Honest scope notes (v0.1)
 

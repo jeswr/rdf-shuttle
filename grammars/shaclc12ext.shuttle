@@ -88,15 +88,17 @@
  *      admit '@'-refs and inline bodies is an open design question
  *      recorded for jeswr/shaclc-1.2.
  *
- * PRINT MODE (serializer) — honest scope note: the v0.1 gen-js
- * serializer derives its writer from the Turtle statement spine
- * (objectList/predicateObjectList/statement/verb) and cannot yet
- * derive the residual-consumption printer this grammar needs
- * (examples/shacl-compact.md describes the oracle-inversion and
- * conditional-emit-inversion showpieces). gen-js therefore emits a
- * parse-only artifact for this grammar; the derived SHACL-CS printer
- * (residual verdict = the "not compact-expressible" decision
- * procedure) is tracked as follow-up work.
+ * PRINT MODE (serializer): gen-js derives the residual-consumption
+ * printer for this grammar (spec §8; residual-serializer-gen.js) —
+ * printing consumes quads from the graph-as-residual and succeeds iff
+ * the residual empties, so a non-empty residual IS the "not
+ * compact-expressible" verdict. The oracle below is discharged by the
+ * consumed quad's predicate (never run backward), the propertyCount
+ * print { } block inverts the conditional emission ([0..1] from a
+ * lone sh:maxCount; an explicit sh:minCount 0 is refused, since the
+ * parse-side when-guard would not re-emit it), and in a strict build
+ * the ext fallback layers do not exist, so their graphs residualize
+ * by construction (examples/shacl-compact.md shows all three).
  *
  * Meta-notation: spec/SHUTTLE.md §4 (v0.1 surface), grammar/shuttle.ebnf.
  * =================================================================== */
