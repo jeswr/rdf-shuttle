@@ -560,17 +560,19 @@ export function tokenValueInfo(tok) {
   const unresolved = [];
   for (const nm of names) {
     if (nm === 'body') { spans.set(nm, { a: `ts + ${prefixLen}`, b: `te - ${suffixLen}`, refItem: false }); continue; }
-    // sub-token ref match
+    // sub-token ref match. Supported layout: optional literal prefix/suffix
+    // around exactly two adjacent ref items, split by one boundary mark
+    // (PNAME_LN's ns/local; ATPNAME_LN's '@'-prefixed variant).
     let matched = false;
     for (let i = 0; i < items.length; i++) {
       if (items[i].k === 'ref' && items[i].name.toLowerCase().includes(nm.toLowerCase())) {
-        // boundary marks: start = (i==0 ? ts : mark after i-1), end = (i==last ? te : mark after i)
-        if (i === 0 && items.length === 2) {
-          marks.m0After = 0;
-          spans.set(nm, { a: 'ts', b: 'tM0', refItem: true });
-        } else if (i === items.length - 1 && items.length === 2) {
-          marks.m0After = 0;
-          spans.set(nm, { a: 'tM0', b: 'te', refItem: true });
+        const twoRefs = iSuf - iPre === 1; // exactly two non-literal items
+        if (twoRefs && i === iPre) {
+          marks.m0After = i;
+          spans.set(nm, { a: iPre === 0 ? 'ts' : `ts + ${prefixLen}`, b: 'tM0', refItem: true });
+        } else if (twoRefs && i === iSuf) {
+          marks.m0After = i - 1;
+          spans.set(nm, { a: 'tM0', b: suffixLen > 0 ? `te - ${suffixLen}` : 'te', refItem: true });
         } else throw new Error(`token ${tok.name}: unsupported part position for '${nm}'`);
         matched = true;
         break;

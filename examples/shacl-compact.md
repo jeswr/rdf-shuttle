@@ -1,5 +1,16 @@
 # Worked example: SHACL Compact Syntax
 
+> **Status (2026-07):** the full grammar now exists —
+> [`grammars/shaclc12ext.shuttle`](../grammars/shaclc12ext.shuttle) (standard
+> SHACL-CS + an `rdf12` layer + the shaclc-js `ext` layer), validated by
+> gen-js against the vendored shaclc-js fixture corpus by graph isomorphism
+> (`tests/conformance/shaclc/`). The **parse** direction below is
+> implemented, including the oracle and the conditional-emit `when` guards;
+> the **print** direction (§"Print direction" below) is not yet derivable —
+> the v0.1 serializer generator reads the Turtle statement spine, and the
+> residual-consumption printer this example specifies is the tracked next
+> step. This file remains the print-direction spec.
+
 Same formalism, different vocabulary — this is the test that Shuttle is a
 grammar *formalism* and not a Turtle generator. It also shows the three
 mechanisms Turtle does not exercise: oracles, conditional emission with

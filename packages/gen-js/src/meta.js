@@ -289,7 +289,7 @@ function parseCoal(sc) {
 
 function parseCmp(sc) {
   let e = parseApply(sc);
-  for (const op of ['==', '!=', '<=', '>=']) {
+  for (const op of ['==', '!=', '<=', '>=', '<', '>']) {
     if (sc.tryLit(op)) return { k: 'cmp', op, l: e, r: parseApply(sc) };
   }
   return e;
@@ -434,6 +434,31 @@ function parseClauseOrExpr(sc) {
     if (!sc.tryWord('error')) sc.err("expected 'error'");
     return { isClause: true, node: { k: 'require', cond, code: sc.name() } };
   }
+  if (w === 'oracle') {
+    // `oracle NAME(args) -> clause [; otherwise -> clause]` (shuttle.ebnf §8 form 7)
+    sc.name();
+    const name = sc.name();
+    sc.expectLit('(');
+    const args = [];
+    if (!sc.tryLit(')')) {
+      do { args.push(parseExpr(sc)); } while (sc.tryLit(','));
+      sc.expectLit(')');
+    }
+    sc.expectLit('->');
+    const thenItem = parseClauseOrExpr(sc);
+    if (!thenItem.isClause) sc.err('oracle -> must be followed by a clause');
+    let elsClause = null;
+    const save = sc.pos;
+    if (sc.tryLit(';') && sc.tryWord('otherwise')) {
+      sc.expectLit('->');
+      const elsItem = parseClauseOrExpr(sc);
+      if (!elsItem.isClause) sc.err('otherwise -> must be followed by a clause');
+      elsClause = elsItem.node;
+    } else {
+      sc.pos = save;
+    }
+    return { isClause: true, node: { k: 'oracle', name, args, then: thenItem.node, els: elsClause } };
+  }
   if (w === 'env') {
     const save = sc.pos;
     sc.name();
@@ -515,11 +540,14 @@ function parseAlternatives(sc) {
 }
 
 function parseAlternative(sc) {
-  const annots = { prefer: null, when: null, covers: null };
+  const annots = { prefer: null, when: null, covers: null, profile: null };
   for (;;) {
     if (sc.tryLit('@prefer')) { sc.expectLit('('); annots.prefer = sc.int(); sc.expectLit(')'); continue; }
     if (sc.tryLit('@when')) { sc.expectLit('('); annots.when = parseExpr(sc); sc.expectLit(')'); continue; }
     if (sc.tryLit('@covers')) { sc.expectLit('('); annots.covers = sc.name(); sc.expectLit(')'); continue; }
+    // @profile(NAME): layer label (turtle12.shuttle NOTE 3). The alternative is
+    // included only when the label is selected at generation time.
+    if (sc.tryLit('@profile')) { sc.expectLit('('); annots.profile = sc.name(); sc.expectLit(')'); continue; }
     break;
   }
   const items = [];
@@ -622,6 +650,8 @@ export function parseGrammar(text, file) {
     name: null,
     headers: {},
     skipTokens: [],
+    imports: [],
+    oracles: [],
     env: [],
     tokens: [],
     tokenByName: new Map(),
@@ -636,11 +666,39 @@ export function parseGrammar(text, file) {
   const HEADER_WORDS = new Set(['target', 'spec-ref', 'start', 'emits', 'profile', 'import', 'skip']);
 
   while (!sc.eof()) {
+    // `@oracle NAME(type) [= curie ('|' curie)*] ;` — declared pure decidable
+    // predicate (shuttle.ebnf §3). The optional finite IRI set makes the
+    // generated artifact self-contained (SHACL-C's recognized-datatype
+    // registry); without a set the oracle must be supplied at runtime
+    // (unsupported in this backend — a generator error if referenced).
+    if (sc.tryLit('@oracle')) {
+      const name = sc.name();
+      sc.expectLit('(');
+      const argTypes = [];
+      if (!sc.tryLit(')')) {
+        do { argTypes.push(sc.name()); } while (sc.tryLit(','));
+        sc.expectLit(')');
+      }
+      let set = null;
+      if (sc.tryLit('=')) {
+        set = [];
+        do {
+          const e = parseExpr(sc);
+          if (e.k !== 'curie' && e.k !== 'iri') sc.err('oracle set entries must be curies or IRIs');
+          set.push(e);
+        } while (sc.tryLit('|'));
+      }
+      sc.expectLit(';');
+      g.oracles.push({ name, argTypes, set });
+      continue;
+    }
     const w = sc.peekWord();
     if (w !== null && HEADER_WORDS.has(w)) {
       sc.name();
       if (w === 'skip') {
         do { g.skipTokens.push(sc.name()); } while (sc.tryLit(','));
+      } else if (w === 'import') {
+        do { g.imports.push(sc.name()); } while (sc.tryLit(','));
       } else if (w === 'spec-ref') {
         g.headers[w] = sc.string();
       } else if (w === 'emits') {
@@ -675,7 +733,25 @@ export function parseGrammar(text, file) {
         if (sc.tryLit('=')) {
           sc.skip();
           if (sc.text[sc.pos] === '<') init = { k: 'iri', value: sc.tryIriref() };
-          else if (sc.text[sc.pos] === '{') { sc.expectLit('{'); sc.expectLit('}'); init = { k: 'emptyMap' }; }
+          else if (sc.text[sc.pos] === '{') {
+            // `{}` or a map literal `{ "key" = <iri> ; … }` (predeclared
+            // prefixes, e.g. SHACL-C's rdf/rdfs/sh/xsd/owl).
+            sc.expectLit('{');
+            if (sc.tryLit('}')) init = { k: 'emptyMap' };
+            else {
+              const entries = [];
+              for (;;) {
+                const key = sc.string();
+                sc.expectLit('=');
+                const v = sc.tryIriref();
+                if (v === null) sc.err('map literal values must be IRIs');
+                entries.push([key, v]);
+                sc.expectLit(';');
+                if (sc.tryLit('}')) break;
+              }
+              init = { k: 'mapLit', entries };
+            }
+          }
           else init = parseExpr(sc);
         }
         sc.expectLit(';');

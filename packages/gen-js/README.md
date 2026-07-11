@@ -7,7 +7,14 @@ modes of the same relation (spec/SHUTTLE.md §1).
 
 ```
 node src/cli.js ../../grammars/turtle12.shuttle -o generated/turtle12.js
+node src/cli.js ../../grammars/shaclc12ext.shuttle -o generated/shaclc12.js    --profile rdf12
+node src/cli.js ../../grammars/shaclc12ext.shuttle -o generated/shaclc12ext.js --profile rdf12,ext
 ```
+
+`--profile` selects which `@profile`-labelled alternative layers are compiled
+in (unlabelled alternatives are always in; omit the flag for the full
+language). A stricter build **rejects** the carved-out syntax by
+construction — the alternatives are absent from its parse tables.
 
 ```js
 import { parse, parseToQuads, createPushParser, parseStream, writeQuads, createWriter }
@@ -55,6 +62,27 @@ templates). Then:
   term classes + DataFactory. It ships once per toolchain and is inlined
   into every artifact.
 
+## SHACL Compact Syntax (shaclc12ext)
+
+The second grammar, `grammars/shaclc12ext.shuttle`, exercises the formalism
+features Turtle does not: the **oracle** clause (`@oracle xsdDatatype(iri) =
+…` — SHACL-C's recognized-datatype registry deciding `sh:datatype` vs
+`sh:class`), **conditional emission** (`emit … when int(mn) > 0` — the
+minCount-omitted-when-0 invariant), **pair-valued productions** (`value =
+(p, o)` with `fst`/`snd` — every `<atom> ('|' <atom>)*` shape decides
+direct-vs-`sh:or`-list one nonterminal late), and **@profile layers**
+(strict/`rdf12`/`ext`). Reference semantics are the shaclc-js jison parser,
+validated by graph isomorphism over its vendored fixture corpus plus new
+RDF 1.2 pairs (`tests/conformance/shaclc/`, see its README).
+
+Honest scope: the artifact is **parse-only** — the serializer generator
+below reads the Turtle statement spine and cannot yet derive the
+residual-consumption printer SHACL-C needs (`examples/shacl-compact.md`
+§print); `writeQuads`/`createWriter` throw with a clear message. The derived
+printer (whose non-empty residual is the "not SHACL-C-expressible" verdict)
+is the tracked next step. The push parser degrades to whole-buffer parsing
+(the start production is document-shaped, not a statement star).
+
 ## Conformance
 
 `npm test` regenerates the artifact and runs the oracle pairs
@@ -62,7 +90,11 @@ templates). Then:
 (parse(.ttl) ≅ parse(.nt), graph isomorphism), serializer round-trip
 (L1/L2, plain and prefix-abbreviated), chunked push parsing (7-byte chunks),
 and negative cases (undeclared prefix → `UNDECLARED_PREFIX`, `"x"@prefix`
-keyword tie). Status: **91/91 — all 22 pairs pass in all four modes.**
+keyword tie). `test/shaclc.test.js` runs the SHACL-CS corpus: the 44 valid
+pairs against BOTH artifacts, the 14 extended pairs (extended accepts ≅
+oracle, strict rejects — including the two strict-mode-leak cases), the 8
+rdf12 pairs, the negative set, push-parser agreement, and baseIRI
+resolution. Status: **234/234 across both suites.**
 
 ## Honest scope notes (v0.1)
 
