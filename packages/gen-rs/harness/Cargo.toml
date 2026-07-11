@@ -10,6 +10,9 @@ publish = false
 [workspace]
 
 [dependencies]
+# Reference parser for the sq-tonhr.1 go/no-go bench (dev tooling only;
+# the generated artifact itself has zero dependencies).
+oxttl = { version = "=0.2.3", features = ["rdf-12"] }
 
 [profile.release]
 lto = true

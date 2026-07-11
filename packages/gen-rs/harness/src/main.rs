@@ -165,11 +165,84 @@ fn neg() {
     }
 }
 
+/// Median-of-N wall-clock bench of one parse configuration.
+fn bench_one(label: &str, bytes_len: usize, iters: usize, mut f: impl FnMut() -> u64) {
+    let mut times: Vec<f64> = Vec::with_capacity(iters);
+    let mut count = 0u64;
+    for _ in 0..iters {
+        let t0 = std::time::Instant::now();
+        count = f();
+        times.push(t0.elapsed().as_secs_f64());
+    }
+    times.sort_by(f64::total_cmp);
+    let med = times[times.len() / 2];
+    println!(
+        "| {label} | {count} | {med:.3} | {:.1} | {:.3} |",
+        bytes_len as f64 / med / 1e6,
+        med * 1e9 / bytes_len as f64
+    );
+}
+
+fn bench(path: &str, iters: usize) {
+    let text = std::fs::read_to_string(path).expect("read corpus");
+    let bytes = text.as_bytes();
+    let is_nt = path.ends_with(".nt");
+    println!("corpus: {path} ({} bytes), median of {iters} runs", bytes.len());
+    println!("| parser | triples | s | MB/s | ns/byte |");
+    println!("|---|---|---|---|---|");
+    bench_one("gen-rs turtle12 (one-shot)", bytes.len(), iters, || {
+        let mut n = 0u64;
+        turtle12::parse(&text, None, |q| {
+            std::hint::black_box(&q);
+            n += 1;
+        })
+        .expect("parse");
+        n
+    });
+    bench_one("gen-rs turtle12 (push, 64 KiB chunks)", bytes.len(), iters, || {
+        let mut n = 0u64;
+        let mut p = PushParser::new(None, |q| {
+            std::hint::black_box(&q);
+            n += 1;
+        });
+        let mut i = 0;
+        while i < text.len() {
+            let mut j = (i + 64 * 1024).min(text.len());
+            while j < text.len() && !text.is_char_boundary(j) {
+                j += 1;
+            }
+            p.push(&text[i..j]).expect("push");
+            i = j;
+        }
+        p.end().expect("end");
+        n
+    });
+    bench_one("oxttl 0.2.3 TurtleParser (rdf-12)", bytes.len(), iters, || {
+        let mut n = 0u64;
+        for r in oxttl::TurtleParser::new().for_slice(bytes) {
+            std::hint::black_box(&r.expect("oxttl parse"));
+            n += 1;
+        }
+        n
+    });
+    if is_nt {
+        bench_one("oxttl 0.2.3 NTriplesParser (rdf-12)", bytes.len(), iters, || {
+            let mut n = 0u64;
+            for r in oxttl::NTriplesParser::new().for_slice(bytes) {
+                std::hint::black_box(&r.expect("oxttl parse"));
+                n += 1;
+            }
+            n
+        });
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("conf") => conf(&args[2], &args[3]),
         Some("neg") => neg(),
+        Some("bench") => bench(&args[2], args.get(3).and_then(|s| s.parse().ok()).unwrap_or(5)),
         Some("count") => {
             let input = std::fs::read_to_string(&args[2]).expect("read");
             let mut n = 0u64;
@@ -192,7 +265,7 @@ fn main() {
             println!("{n} triples, {carried} bytes carried at the split");
         }
         _ => {
-            eprintln!("usage: harness conf <conformance-dir> <out-dir> | neg | count <file> | pending-demo");
+            eprintln!("usage: harness conf <dir> <out> | neg | count <file> | bench <file> [iters] | pending-demo");
             std::process::exit(2);
         }
     }

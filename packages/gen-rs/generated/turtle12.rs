@@ -491,41 +491,30 @@ fn rc_from_cow(c: Cow<'_, str>) -> Rc<str> {
     }
 }
 
-/* ---- interning helpers (free functions over machine fields, so callers
- *      can split-borrow disjoint fields in one expression) ---- */
+/* ---- term construction (free functions, so callers can split-borrow
+ *      machine fields in one expression) ----
+ *
+ * Deliberately NO term-interning caches: measured on this backend, owned
+ * per-occurrence allocation beats both an IRI-interning map and a two-level
+ * pname cache on every corpus profile (repeated-term Turtle, repeated-IRI
+ * N-Triples, high-distinct-cardinality N-Triples) — hashing costs more than
+ * bump allocation here. (The JS backend's caches are a JS-ism: object
+ * allocation + GC pressure dominate there.) Consumers that want shared
+ * terms intern downstream (e.g. a dictionary sink on the emit callback). */
 
-/// Intern a named node: repeated IRIs share one `Rc<str>` + `Term`.
-fn nn(cache: &mut HashMap<Rc<str>, Term>, v: Cow<'_, str>) -> Term {
-    if let Some(t) = cache.get(v.as_ref()) {
-        return t.clone();
-    }
-    let key: Rc<str> = Rc::from(v.as_ref());
-    let t = Term::NamedNode(Rc::clone(&key));
-    cache.insert(key, t.clone());
-    t
+/// Build a named node from a (possibly borrowed) IRI string.
+#[inline]
+fn nn(v: Cow<'_, str>) -> Term {
+    Term::NamedNode(rc_from_cow(v))
 }
 
-/// pname interning: prefix -> (local -> term); short-string hashing only.
-/// Invalidated when a prefix is (re)bound.
-fn expand_pn(
-    pn_cache: &mut HashMap<String, HashMap<String, Term>>,
-    i_cache: &mut HashMap<Rc<str>, Term>,
-    prefixes: &HashMap<String, Rc<str>>,
-    pfx: &str,
-    local: &str,
-) -> Term {
-    let inner = match pn_cache.get_mut(pfx) {
-        Some(m) => m,
-        None => pn_cache.entry(pfx.to_string()).or_default(),
-    };
-    if let Some(t) = inner.get(local) {
-        return t.clone();
-    }
-    // `require boundPrefix(...)` ran before this expansion.
+/// Expand a prefixed name. `require boundPrefix(...)` ran before this.
+fn expand_pn(prefixes: &HashMap<String, Rc<str>>, pfx: &str, local: &str) -> Term {
     let ns = prefixes.get(pfx).expect("prefix bound (checked by require)");
-    let t = nn(i_cache, Cow::Owned(format!("{ns}{local}")));
-    inner.insert(local.to_string(), t.clone());
-    t
+    let mut s = String::with_capacity(ns.len() + local.len());
+    s.push_str(ns);
+    s.push_str(local);
+    Term::NamedNode(Rc::from(s))
 }
 
 
@@ -1410,9 +1399,6 @@ struct Machine<'i, F: FnMut(Triple)> {
     prefix_order: Vec<String>,
     /* fresh blank nodes: per-derivation counter (deterministic b0, b1, …) */
     fresh_ctr: u64,
-    /* interning caches */
-    i_cache: HashMap<Rc<str>, Term>,
-    pn_cache: HashMap<String, HashMap<String, Term>>,
     /* push-mode statement rollback */
     push_mode: bool,
     trail: Vec<String>,
@@ -1453,8 +1439,6 @@ impl<'i, F: FnMut(Triple)> Machine<'i, F> {
             env_version: None,
             prefix_order: Vec::new(),
             fresh_ctr: 0,
-            i_cache: HashMap::new(),
-            pn_cache: HashMap::new(),
             push_mode,
             trail: Vec::new(),
             stmt_buf: Vec::new(),
@@ -1757,7 +1741,6 @@ self.next_token()?;
 if self.tk != T_LIT_0 { return Err(self.perr_exp(T_LIT_0)); }
 self.next_token()?;
 let _t0: Rc<str> = rc_from_cow(resolve_iri(&self.env_base, i.as_ref()));
-self.pn_cache.remove(ns.as_ref());
 if !self.env_prefixes.contains_key(ns.as_ref()) { self.prefix_order.push(ns.as_ref().to_string()); }
 self.env_prefixes.insert(ns.as_ref().to_string(), _t0);
 Ok(())
@@ -1796,7 +1779,6 @@ if self.tk != T_IRIREF { return Err(self.perr_exp(T_IRIREF)); }
 let i: Rc<str> = if self.t_esc { rc_from_string(unesc_u(&self.inp[self.ts + 1..self.te - 1]).map_err(|_| self.perr("INVALID_CODEPOINT"))?) } else { Rc::from(&self.inp[self.ts + 1..self.te - 1]) };
 self.next_token()?;
 let _t0: Rc<str> = rc_from_cow(resolve_iri(&self.env_base, i.as_ref()));
-self.pn_cache.remove(ns.as_ref());
 if !self.env_prefixes.contains_key(ns.as_ref()) { self.prefix_order.push(ns.as_ref().to_string()); }
 self.env_prefixes.insert(ns.as_ref().to_string(), _t0);
 Ok(())
@@ -2182,7 +2164,7 @@ match self.tk {
 T_IRIREF => {
 let r: Rc<str> = if self.t_esc { rc_from_string(unesc_u(&self.inp[self.ts + 1..self.te - 1]).map_err(|_| self.perr("INVALID_CODEPOINT"))?) } else { Rc::from(&self.inp[self.ts + 1..self.te - 1]) };
 self.next_token()?;
-_v = nn(&mut self.i_cache, resolve_iri(&self.env_base, r.as_ref()));
+_v = nn(resolve_iri(&self.env_base, r.as_ref()));
 }
 T_PNAME_LN | T_PNAME_NS => {
 let p = self.p_PrefixedName()?;
@@ -2203,13 +2185,13 @@ let n_0: Rc<str> = Rc::from(&self.inp[self.ts..(self.t_m0 as usize) - 1]);
 let n_1: Rc<str> = if self.t_esc { rc_from_string(unesc_local(&self.inp[(self.t_m0 as usize)..self.te])) } else { Rc::from(&self.inp[(self.t_m0 as usize)..self.te]) };
 self.next_token()?;
 if !(self.env_prefixes.contains_key(n_0.as_ref())) { return Err(self.perr("UNDECLARED_PREFIX")); }
-_v = expand_pn(&mut self.pn_cache, &mut self.i_cache, &self.env_prefixes, n_0.as_ref(), n_1.as_ref());
+_v = expand_pn(&self.env_prefixes, n_0.as_ref(), n_1.as_ref());
 }
 T_PNAME_NS => {
 let n: Rc<str> = Rc::from(&self.inp[self.ts..self.te - 1]);
 self.next_token()?;
 if !(self.env_prefixes.contains_key(n.as_ref())) { return Err(self.perr("UNDECLARED_PREFIX")); }
-_v = expand_pn(&mut self.pn_cache, &mut self.i_cache, &self.env_prefixes, n.as_ref(), "");
+_v = expand_pn(&self.env_prefixes, n.as_ref(), "");
 }
 _ => {
 return Err(self.perr_alt(&[T_PNAME_LN, T_PNAME_NS]));

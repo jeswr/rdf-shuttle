@@ -217,7 +217,7 @@ function compileCall(e, ctx, stmts) {
       const p = partRef(n.tuple[0]);
       const l = partRef(n.tuple[1]);
       return {
-        rs: `expand_pn(&mut self.pn_cache, &mut self.i_cache, &${ENV_RS(args[0].name)}, ${p}, ${l})`,
+        rs: `expand_pn(&${ENV_RS(args[0].name)}, ${p}, ${l})`,
         t: 'term',
       };
     }
@@ -270,15 +270,13 @@ function partRef(part) {
 export function termArg(e, ctx, stmts) {
   const r = compileExpr(e, ctx, stmts);
   if (r.t === 'str') {
-    // Interning point: a Cow-producing resolve feeds the interner without
-    // materializing an Rc first.
+    // A Cow-producing resolve feeds term construction without materializing
+    // an Rc first.
     if (r.resolveParts) {
-      return { rs: `nn(&mut self.i_cache, resolve_iri(&${r.resolveParts.base}, ${r.resolveParts.rel}))`, t: 'term' };
+      return { rs: `nn(resolve_iri(&${r.resolveParts.base}, ${r.resolveParts.rel}))`, t: 'term' };
     }
-    if (r.ref) return { rs: `nn(&mut self.i_cache, Cow::Borrowed(${r.ref}.as_ref()))`, t: 'term' };
-    const tmp = ctx.freshTmp();
-    stmts.push(`let ${tmp}: Rc<str> = ${r.rs};`);
-    return { rs: `nn(&mut self.i_cache, Cow::Borrowed(${tmp}.as_ref()))`, t: 'term' };
+    if (r.ref) return { rs: `Term::NamedNode(${r.ref}.clone())`, t: 'term' };
+    return { rs: `Term::NamedNode(${r.rs})`, t: 'term' };
   }
   if (r.t !== 'term') throw new Error(`term argument has type ${r.t}`);
   return r;
@@ -332,13 +330,12 @@ export function compileClause(cl, ctx, stmts, valueVar = '_v') {
           stmts.push(`if self.push_mode && !${target}.contains_key(${k}) { self.trail.push(${k}.to_string()); }`);
           stmts.push(`${target}.insert(${k}.to_string(), ${v.rs});`);
         } else {
-          // iri-valued map (prefixes): rebinding invalidates the pname cache
+          // iri-valued map (prefixes)
           const v = ex.args[2].k === 'call' && ex.args[2].fn === 'resolve'
             ? compileExpr(ex.args[2], ctx, stmts)
             : (() => { const r = compileExpr(ex.args[2], ctx, stmts); if (r.t !== 'str') throw new Error('map values must be str'); return r; })();
           const tmp = ctx.freshTmp();
           stmts.push(`let ${tmp}: Rc<str> = ${v.rs};`);
-          stmts.push(`self.pn_cache.remove(${k});`);
           stmts.push(`if !${target}.contains_key(${k}) { self.prefix_order.push(${k}.to_string()); }`);
           stmts.push(`${target}.insert(${k}.to_string(), ${tmp});`);
         }

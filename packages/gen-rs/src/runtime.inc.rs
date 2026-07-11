@@ -470,39 +470,28 @@ fn rc_from_cow(c: Cow<'_, str>) -> Rc<str> {
     }
 }
 
-/* ---- interning helpers (free functions over machine fields, so callers
- *      can split-borrow disjoint fields in one expression) ---- */
+/* ---- term construction (free functions, so callers can split-borrow
+ *      machine fields in one expression) ----
+ *
+ * Deliberately NO term-interning caches: measured on this backend, owned
+ * per-occurrence allocation beats both an IRI-interning map and a two-level
+ * pname cache on every corpus profile (repeated-term Turtle, repeated-IRI
+ * N-Triples, high-distinct-cardinality N-Triples) — hashing costs more than
+ * bump allocation here. (The JS backend's caches are a JS-ism: object
+ * allocation + GC pressure dominate there.) Consumers that want shared
+ * terms intern downstream (e.g. a dictionary sink on the emit callback). */
 
-/// Intern a named node: repeated IRIs share one `Rc<str>` + `Term`.
-fn nn(cache: &mut HashMap<Rc<str>, Term>, v: Cow<'_, str>) -> Term {
-    if let Some(t) = cache.get(v.as_ref()) {
-        return t.clone();
-    }
-    let key: Rc<str> = Rc::from(v.as_ref());
-    let t = Term::NamedNode(Rc::clone(&key));
-    cache.insert(key, t.clone());
-    t
+/// Build a named node from a (possibly borrowed) IRI string.
+#[inline]
+fn nn(v: Cow<'_, str>) -> Term {
+    Term::NamedNode(rc_from_cow(v))
 }
 
-/// pname interning: prefix -> (local -> term); short-string hashing only.
-/// Invalidated when a prefix is (re)bound.
-fn expand_pn(
-    pn_cache: &mut HashMap<String, HashMap<String, Term>>,
-    i_cache: &mut HashMap<Rc<str>, Term>,
-    prefixes: &HashMap<String, Rc<str>>,
-    pfx: &str,
-    local: &str,
-) -> Term {
-    let inner = match pn_cache.get_mut(pfx) {
-        Some(m) => m,
-        None => pn_cache.entry(pfx.to_string()).or_default(),
-    };
-    if let Some(t) = inner.get(local) {
-        return t.clone();
-    }
-    // `require boundPrefix(...)` ran before this expansion.
+/// Expand a prefixed name. `require boundPrefix(...)` ran before this.
+fn expand_pn(prefixes: &HashMap<String, Rc<str>>, pfx: &str, local: &str) -> Term {
     let ns = prefixes.get(pfx).expect("prefix bound (checked by require)");
-    let t = nn(i_cache, Cow::Owned(format!("{ns}{local}")));
-    inner.insert(local.to_string(), t.clone());
-    t
+    let mut s = String::with_capacity(ns.len() + local.len());
+    s.push_str(ns);
+    s.push_str(local);
+    Term::NamedNode(Rc::from(s))
 }

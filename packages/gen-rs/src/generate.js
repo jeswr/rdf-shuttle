@@ -165,9 +165,6 @@ struct Machine<'i, F: FnMut(Triple)> {
     ${envFields.join('\n    ')}
     /* fresh blank nodes: per-derivation counter (deterministic b0, b1, …) */
     fresh_ctr: u64,
-    /* interning caches */
-    i_cache: HashMap<Rc<str>, Term>,
-    pn_cache: HashMap<String, HashMap<String, Term>>,
     /* push-mode statement rollback */
     push_mode: bool,
     trail: Vec<String>,
@@ -193,8 +190,6 @@ impl<'i, F: FnMut(Triple)> Machine<'i, F> {
             depth: 0,
             ${envInit.join('\n            ')}
             fresh_ctr: 0,
-            i_cache: HashMap::new(),
-            pn_cache: HashMap::new(),
             push_mode,
             trail: Vec::new(),
             stmt_buf: Vec::new(),

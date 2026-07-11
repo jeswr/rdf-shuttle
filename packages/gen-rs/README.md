@@ -38,7 +38,15 @@ Differences from the JS artifact (all documented in the artifact header):
 - positions are UTF-8 byte offsets (JS: UTF-16 units) — internally consistent,
   spans never cross the API; error columns count bytes;
 - `\uD800`-style lone-surrogate escapes are a `INVALID_CODEPOINT` syntax
-  error (JS strings can hold lone surrogates; Rust `String` cannot).
+  error (JS strings can hold lone surrogates; Rust `String` cannot);
+- **no term-interning caches** (the JS backend interns NamedNodes and
+  pnames): measured on this backend, per-occurrence owned allocation beats
+  both an IRI-interning map and a two-level pname cache on every corpus
+  profile tried (repeated-term Turtle, repeated-IRI N-Triples, high-distinct-
+  cardinality N-Triples) — hashing costs more than bump allocation in Rust,
+  the reverse of the JS GC trade-off. Consumers that want shared terms
+  intern downstream (e.g. a dictionary sink on the emit callback); see
+  `harness` bench mode for the numbers on your machine.
 
 ## Usage
 
