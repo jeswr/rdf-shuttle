@@ -11,3 +11,4 @@ build/
 bench/node_modules/
 bench/corpus-*.ttl
 bench/isolate-*.log
+package-lock.json
