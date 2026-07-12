@@ -24,6 +24,27 @@ export const CORE_PREFIXES = {
   xsd: 'http://www.w3.org/2001/XMLSchema#',
 };
 
+/** Additional compile-time curie tables, keyed by `import` header name. */
+export const IMPORT_PREFIXES = {
+  'core-terms': CORE_PREFIXES,
+  'shacl-terms': {
+    sh: 'http://www.w3.org/ns/shacl#',
+    owl: 'http://www.w3.org/2002/07/owl#',
+    rdfs: 'http://www.w3.org/2000/01/rdf-schema#',
+  },
+};
+
+/** Resolve the compile-time curie table for a grammar's import list. */
+export function curieTable(imports) {
+  const table = { ...CORE_PREFIXES }; // rdf:/xsd: always available (v0.1 compat)
+  for (const im of imports || []) {
+    const t = IMPORT_PREFIXES[im];
+    if (!t) throw new Error(`unknown import '${im}' (known: ${Object.keys(IMPORT_PREFIXES).join(', ')})`);
+    Object.assign(table, t);
+  }
+  return table;
+}
+
 /** Compile-time environment for one production body. */
 export class Ctx {
   constructor(gen, prod) {
@@ -43,10 +64,21 @@ export class Ctx {
 
 /** Intern a curie constant, returns the JS identifier of the NamedNode const. */
 export function curieConst(gen, prefix, local) {
-  const ns = CORE_PREFIXES[prefix];
-  if (!ns) throw new Error(`unknown compile-time curie prefix '${prefix}:' (only core-terms rdf:/xsd: are importable)`);
+  const ns = (gen.curies || CORE_PREFIXES)[prefix];
+  if (!ns) throw new Error(`unknown compile-time curie prefix '${prefix}:' (importable tables: ${Object.keys(IMPORT_PREFIXES).join(', ')})`);
   const iri = ns + local;
   return iriConst(gen, iri);
+}
+
+/** Expand a curie/iri expression node to a full IRI string (compile time). */
+export function curieIriOf(gen, e) {
+  if (e.k === 'iri') return e.value;
+  if (e.k === 'curie') {
+    const ns = (gen.curies || CORE_PREFIXES)[e.prefix];
+    if (!ns) throw new Error(`unknown compile-time curie prefix '${e.prefix}:'`);
+    return ns + e.local;
+  }
+  throw new Error(`expected curie or IRI, got '${e.k}'`);
 }
 
 export function iriConst(gen, iri) {
@@ -70,7 +102,7 @@ export function compileExpr(e, ctx, stmts) {
     case 'name': {
       const b = ctx.bindings.get(e.name);
       if (!b) throw new Error(`unbound name '${e.name}' in ${ctx.prod ? ctx.prod.name : '?'}`);
-      if (b.tuple) return { js: null, t: 'tuple', tuple: b.tuple };
+      if (b.tuple) return { js: b.js || null, t: 'tuple', tuple: b.tuple };
       return b;
     }
     case 'env': return { js: ENV_JS(e.name), t: e.name === 'base' ? 'str' : 'unknown' };
@@ -149,6 +181,7 @@ export function compileExpr(e, ctx, stmts) {
       return { js: `(${subj.tuple[disc].js} == null ? ${nE.js} : ${sE.js})`, t: 'term' };
     }
     case 'call': return compileCall(e, ctx, stmts);
+    case 'num': return { js: String(e.value), t: 'num' };
     default:
       throw new Error(`unsupported expression kind '${e.k}'`);
   }
@@ -185,6 +218,11 @@ function compileCall(e, ctx, stmts) {
     case 'boundPrefix': {
       const m = arg(args[0], ctx, stmts), k = arg(args[1], ctx, stmts);
       return { js: `${m.js}.has(${k.js})`, t: 'unknown' };
+    }
+    case 'int': {
+      // int(s) — numeric reading of a verbatim lexical form (count bounds).
+      const a = arg(args[0], ctx, stmts);
+      return { js: `parseInt(${a.js}, 10)`, t: 'num' };
     }
     case 'expandPName': {
       // span-hash interning: repeated pnames (predicates, class IRIs) hit a
@@ -239,16 +277,59 @@ export function compileClause(cl, ctx, stmts, valueVar = '_v') {
       let r = compileExpr(cl.expr, ctx, stmts);
       const semT = ctx.prod ? ctx.prod.semType : 'term';
       if ((semT === 'term' || semT === 'term!') && r.t === 'str') r = { js: `NN(${r.js})`, t: 'term' };
-      if (r.t === 'tuple') throw new Error('tuple-valued productions not supported');
+      if (r.t === 'tuple') {
+        // pair-valued production (`value = (p, o)`, shuttle.ebnf §9): the
+        // runtime representation is a 2-array, destructured by fst/snd at
+        // the caller. Needed wherever an emission's placement is decided one
+        // nonterminal late (SHACL-C's '<atom> ("|" <atom>)*' shapes).
+        if (semT !== 'pair') throw new Error(`tuple value in non-pair production '${ctx.prod ? ctx.prod.name : '?'}'`);
+        const parts = r.tuple.map((x) => x.js);
+        if (parts.some((x) => x == null)) throw new Error('unsupported tuple value shape');
+        stmts.push(`${valueVar} = [${parts.join(', ')}];`);
+        return;
+      }
       stmts.push(`${valueVar} = ${r.js};`);
       return;
     }
     case 'emit': {
+      if (cl.g) throw new Error('emit @graph not supported by the triples-emitting backend yet');
+      if (cl.when) {
+        // conditional emission (shuttle.ebnf §8 form 2): arguments are
+        // evaluated only when the guard holds (they may be absent otherwise,
+        // e.g. sh:maxCount for '*').
+        const c = compileExpr(cl.when, ctx, stmts);
+        const inner = [];
+        const s = termArg(cl.s, ctx, inner);
+        const p = termArg(cl.p, ctx, inner);
+        const o = termArg(cl.o, ctx, inner);
+        inner.push(`emitQ(${s.js}, ${p.js}, ${o.js});`);
+        stmts.push(`if (${c.js}) {\n${inner.join('\n')}\n}`);
+        return;
+      }
       const s = termArg(cl.s, ctx, stmts);
       const p = termArg(cl.p, ctx, stmts);
       const o = termArg(cl.o, ctx, stmts);
-      if (cl.g || cl.when) throw new Error('emit @graph / when not supported by the turtle profile backend yet');
       stmts.push(`emitQ(${s.js}, ${p.js}, ${o.js});`);
+      return;
+    }
+    case 'oracle': {
+      // `oracle NAME(args) -> clause ; otherwise -> clause` (§8 form 7).
+      // Parse-mode reading: branch on the declared decidable predicate.
+      // (Print-mode reading — the consumed quad's predicate discharges the
+      // oracle — belongs to the future residual serializer.)
+      const decl = (ctx.gen.oracles || new Map()).get(cl.name);
+      if (!decl) throw new Error(`oracle '${cl.name}' not declared (@oracle ${cl.name}(…) = …)`);
+      const args = cl.args.map((a) => termArg(a, ctx, stmts));
+      const cond = `OR_${cl.name}(${args.map((a) => a.js).join(', ')})`;
+      const thenStmts = [];
+      compileClause(cl.then, ctx, thenStmts, valueVar);
+      if (cl.els) {
+        const elsStmts = [];
+        compileClause(cl.els, ctx, elsStmts, valueVar);
+        stmts.push(`if (${cond}) {\n${thenStmts.join('\n')}\n} else {\n${elsStmts.join('\n')}\n}`);
+      } else {
+        stmts.push(`if (${cond}) {\n${thenStmts.join('\n')}\n}`);
+      }
       return;
     }
     case 'freshDecl': {

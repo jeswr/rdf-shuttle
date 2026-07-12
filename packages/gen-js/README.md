@@ -7,7 +7,14 @@ modes of the same relation (spec/SHUTTLE.md §1).
 
 ```
 node src/cli.js ../../grammars/turtle12.shuttle -o generated/turtle12.js
+node src/cli.js ../../grammars/shaclc12ext.shuttle -o generated/shaclc12.js    --profile rdf12
+node src/cli.js ../../grammars/shaclc12ext.shuttle -o generated/shaclc12ext.js --profile rdf12,ext
 ```
+
+`--profile` selects which `@profile`-labelled alternative layers are compiled
+in (unlabelled alternatives are always in; omit the flag for the full
+language). A stricter build **rejects** the carved-out syntax by
+construction — the alternatives are absent from its parse tables.
 
 ```js
 import { parse, parseToQuads, createPushParser, parseStream, writeQuads, createWriter }
@@ -55,6 +62,42 @@ templates). Then:
   term classes + DataFactory. It ships once per toolchain and is inlined
   into every artifact.
 
+## SHACL Compact Syntax (shaclc12ext)
+
+The second grammar, `grammars/shaclc12ext.shuttle`, exercises the formalism
+features Turtle does not: the **oracle** clause (`@oracle xsdDatatype(iri) =
+…` — SHACL-C's recognized-datatype registry deciding `sh:datatype` vs
+`sh:class`), **conditional emission** (`emit … when int(mn) > 0` — the
+minCount-omitted-when-0 invariant), **pair-valued productions** (`value =
+(p, o)` with `fst`/`snd` — every `<atom> ('|' <atom>)*` shape decides
+direct-vs-`sh:or`-list one nonterminal late), and **@profile layers**
+(strict/`rdf12`/`ext`). Reference semantics are the shaclc-js jison parser,
+validated by graph isomorphism over its vendored fixture corpus plus new
+RDF 1.2 pairs (`tests/conformance/shaclc/`, see its README).
+
+The print direction is the **residual-consumption serializer**
+(`residual-serializer-gen.js`, spec §8): printing starts with the whole
+graph as a residual, each construct consumes the quads it re-emits on
+parse, and print succeeds iff the residual empties. `writeQuads` throws
+`ShuttleResidualError` (carrying the unconsumed quads) when the graph is
+not compact-expressible; `printWithResidual` returns the same verdict
+non-throwing. The three showpieces of `examples/shacl-compact.md` hold:
+the oracle is discharged by the consumed quad's predicate (never run
+backward — `sh:class xsd:string` prints as `class=xsd:string`, never as a
+bare IRI), the `print { … ?? d }` defaults invert conditional emission
+(`[0..1]` regenerates from a lone `sh:maxCount`, while an explicit
+`sh:minCount 0` — which the parse-side `when` guard would suppress — is
+refused into the residual instead of drifting), and in strict builds the
+extended fallback layers (`; …` annotations, `% … %` escapes, trailing
+turtle) do not exist, so graphs needing them get a residual verdict by
+construction. Honest scope: the grammar's stated data (keyword/IRI tables,
+oracle registry, emitted vocabulary, print defaults, punctuation, lexical
+guards, profile-gated layers) is extracted from the AST; the consumption
+skeleton is the backend's built-in print-mode reading of the shaclc
+production shapes, not yet a generic inversion of arbitrary clause bodies.
+The push parser degrades to whole-buffer parsing (the start production is
+document-shaped, not a statement star).
+
 ## Conformance
 
 `npm test` regenerates the artifact and runs the oracle pairs
@@ -62,7 +105,15 @@ templates). Then:
 (parse(.ttl) ≅ parse(.nt), graph isomorphism), serializer round-trip
 (L1/L2, plain and prefix-abbreviated), chunked push parsing (7-byte chunks),
 and negative cases (undeclared prefix → `UNDECLARED_PREFIX`, `"x"@prefix`
-keyword tie). Status: **91/91 — all 22 pairs pass in all four modes.**
+keyword tie). `test/shaclc.test.js` runs the SHACL-CS corpus: the 44 valid
+pairs against BOTH artifacts, the 14 extended pairs (extended accepts ≅
+oracle, strict rejects — including the two strict-mode-leak cases), the 8
+rdf12 pairs, the negative set, push-parser agreement, baseIRI resolution,
+and the print direction: parse∘print∘parse ≅ parse over the full corpus
+(valid + rdf12 on both artifacts, extended on the extended artifact),
+residual verdicts (strict-leak graphs, sh:sparql, guard-suppressed
+sh:minCount 0, shared blank nodes, missing document-ontology quad), and
+the two oracle showpieces. Status: **362/362 across both suites.**
 
 ## Honest scope notes (v0.1)
 

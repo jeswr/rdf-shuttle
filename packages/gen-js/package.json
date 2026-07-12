@@ -9,10 +9,14 @@
   },
   "exports": {
     ".": "./src/generate.js",
-    "./turtle12": "./generated/turtle12.js"
+    "./turtle12": "./generated/turtle12.js",
+    "./shaclc12": "./generated/shaclc12.js",
+    "./shaclc12ext": "./generated/shaclc12ext.js"
   },
   "scripts": {
-    "generate": "node src/cli.js ../../grammars/turtle12.shuttle -o generated/turtle12.js",
+    "generate": "npm run generate:turtle12 && npm run generate:shaclc",
+    "generate:turtle12": "node src/cli.js ../../grammars/turtle12.shuttle -o generated/turtle12.js",
+    "generate:shaclc": "node src/cli.js ../../grammars/shaclc12ext.shuttle -o generated/shaclc12.js --profile rdf12 && node src/cli.js ../../grammars/shaclc12ext.shuttle -o generated/shaclc12ext.js --profile rdf12,ext",
     "test": "npm run generate && node --test test/"
   }
 }

@@ -167,8 +167,18 @@ export class ParserGen {
     if (!p) throw new Error(`unknown production '${name}'`);
     const st = p.semType;
     if (st === 'term' || st === 'term!') return 'term';
+    if (st === 'pair') return 'pair';
     if (st === 'unit' || st === 'graph') return null;
     return 'str';
+  }
+
+  /** Runtime tuple binding for a pair-valued variable (a JS 2-array). */
+  pairBinding(name) {
+    return {
+      js: name,
+      t: 'tuple',
+      tuple: [{ js: `${name}[0]`, t: 'term' }, { js: `${name}[1]`, t: 'term' }],
+    };
   }
 
   callCode(prim, ctx) {
@@ -176,6 +186,11 @@ export class ParserGen {
       const stmts = [];
       const r = compileExpr(a, ctx, stmts);
       if (stmts.length > 0) throw new Error('side-effecting call arguments unsupported');
+      if (r.t === 'tuple') {
+        // pair argument: pass the runtime 2-array (or rebuild it from parts,
+        // e.g. a PNAME_LN token's split spans).
+        return r.js !== null ? r.js : `[${r.tuple.map((x) => x.js).join(', ')}]`;
+      }
       return r.js;
     });
     return `p_${prim.name}(${args.join(', ')})`;
@@ -230,7 +245,7 @@ export class ParserGen {
         if (into) out.push(`${into} = ${call};`);
         else if (binding) {
           out.push(`const ${binding} = ${call};`);
-          ctx.bindings.set(binding, { js: binding, t: t || 'unknown' });
+          ctx.bindings.set(binding, t === 'pair' ? this.pairBinding(binding) : { js: binding, t: t || 'unknown' });
         } else out.push(`${call};`);
         return;
       }
@@ -348,6 +363,14 @@ export class ParserGen {
 
   /** Dispatch over alternatives via switch(tk). */
   dispatch(alts, ctx, out, { assign = null, checked = false } = {}) {
+    if (alts.length === 0) {
+      // all alternatives excluded by the active profile: the production is
+      // dead. Reachable only through opt/star references (whose FIRST-set
+      // guards are statically false); a required reference is a generator
+      // error at the reference site.
+      out.push(`perr('PROFILE_EXCLUDED');`);
+      return;
+    }
     if (alts.length === 1) {
       this.compileAlt(alts[0], ctx, out, checked, assign);
       return;
@@ -405,7 +428,10 @@ export class ParserGen {
       if (base === 'string' || base === 'int') return 'str';
       return 'term';
     };
-    for (const par of p.params) ctx.bindings.set(par.name, { js: par.name, t: paramT(par.type) });
+    for (const par of p.params) {
+      const base = par.type.replace(/\?$/, '');
+      ctx.bindings.set(par.name, base === 'pair' ? this.pairBinding(par.name) : { js: par.name, t: paramT(par.type) });
+    }
     const hasValue = this.semTypeHasValue(p.semType);
     const rec = this.recursive.has(p.name);
     const body = [];

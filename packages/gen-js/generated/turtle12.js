@@ -317,7 +317,7 @@ const T_LIT_16 = 36; // '{|'
 const T_LIT_17 = 37; // '|}'
 const TOKEN_NAMES = ['<eof>', "AT_PREFIX", "AT_BASE", "AT_VERSION", "KW_PREFIX", "KW_BASE", "KW_VERSION", "IRIREF", "PNAME_NS", "PNAME_LN", "BLANK_NODE_LABEL", "ANON", "LANG_DIR", "INTEGER", "DECIMAL", "DOUBLE", "STRING_LITERAL_QUOTE", "STRING_LITERAL_SINGLE_QUOTE", "STRING_LITERAL_LONG_QUOTE", "STRING_LITERAL_LONG_SINGLE_QUOTE", "'.'", "';'", "','", "'a'", "'['", "']'", "'('", "')'", "'^^'", "'true'", "'false'", "'<<('", "')>>'", "'<<'", "'>>'", "'~'", "'{|'", "'|}'"];
 
-/* ---- interned curie constants (compile-time, from core-terms) ---- */
+/* ---- interned curie constants (compile-time, from the import tables) ---- */
 const C0 = new NamedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
 const C1 = new NamedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#nil");
 const C2 = new NamedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#first");
@@ -328,6 +328,9 @@ const C6 = new NamedNode("http://www.w3.org/2001/XMLSchema#decimal");
 const C7 = new NamedNode("http://www.w3.org/2001/XMLSchema#double");
 const C8 = new NamedNode("http://www.w3.org/2001/XMLSchema#boolean");
 const C9 = new NamedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies");
+
+/* ---- oracle decision sets (@oracle declarations) ---- */
+
 
 /* ---- parser first-sets ---- */
 const FS_0 = mkFS([T_ANON, T_AT_BASE, T_AT_PREFIX, T_AT_VERSION, T_BLANK_NODE_LABEL, T_IRIREF, T_KW_BASE, T_KW_PREFIX, T_KW_VERSION, T_LIT_13, T_LIT_4, T_LIT_6, T_PNAME_LN, T_PNAME_NS]);

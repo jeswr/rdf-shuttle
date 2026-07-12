@@ -77,3 +77,9 @@ three conformance failures in a current hand-written parser (spec §8).
   no independent RDF 1.2 parser was used as oracle (that circularity — testing
   the pairs with the parsers they are meant to test — is exactly what the
   reference-interpreter trust anchor replaces).
+
+## SHACL Compact Syntax corpus
+
+The `shaclc/` subdirectory carries the corpus for the parsers generated from
+`grammars/shaclc12ext.shuttle` (vendored shaclc-js pairs + new RDF 1.2 pairs +
+strict-mode negative cases) — see [`shaclc/README.md`](shaclc/README.md).
