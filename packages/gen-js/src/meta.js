@@ -815,6 +815,21 @@ export function parseGrammar(text, file) {
       effects = sc.text.slice(start + 1, end);
       sc.pos = end + 1;
     }
+    // prodAnnot* (shuttle.ebnf §6): only @maxdepth is implemented so far —
+    // a per-production recursion cap the backends use in place of their
+    // built-in default. @buffered/@native stay unimplemented (loud error).
+    let maxdepth = null;
+    for (;;) {
+      if (sc.tryLit('@maxdepth')) {
+        sc.expectLit('(');
+        maxdepth = sc.int();
+        if (!(maxdepth > 0)) sc.err('@maxdepth must be a positive integer');
+        sc.expectLit(')');
+        continue;
+      }
+      if (sc.tryLit('@buffered') || sc.tryLit('@native')) sc.err('production annotation not implemented by this front end');
+      break;
+    }
     sc.expectLit('::=');
     const alts = parseAlternatives(sc);
     let printDirective = null;
@@ -823,7 +838,7 @@ export function parseGrammar(text, file) {
       printDirective = sc.rawBraces();
     }
     sc.expectLit(';');
-    const prod = { name, params, semType, effects, alts, printDirective };
+    const prod = { name, params, semType, effects, alts, printDirective, maxdepth };
     g.prods.push(prod);
     g.prodByName.set(name, prod);
   }

@@ -529,7 +529,7 @@ export class ParserGen {
     const body = [];
     if (rec) {
       body.push(`self.depth += 1;`);
-      body.push(`if self.depth > ${MAXDEPTH} { return Err(self.perr("MAXDEPTH")); }`);
+      body.push(`if self.depth > ${p.maxdepth ?? MAXDEPTH} { return Err(self.perr("MAXDEPTH")); }`);
     }
     if (hasValue) body.push(`let _v: ${this.retTy(p.semType, p.name)};`);
     this.dispatch(p.alts, ctx, body, {});

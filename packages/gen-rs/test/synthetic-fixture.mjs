@@ -23,7 +23,15 @@ token IRIREF : string ::= '<' [^\\u0000-\\u0020<>"{}|^\`\\\\]* '>' => body ;
 doc : graph ::= stmt* ;
 
 stmt : graph [emits, reads env.base]
-  ::= s=IRIREF ( k=kw o=IRIREF { emit resolve(env.base, s) k resolve(env.base, o) } )* '.' ;
+  ::= s=IRIREF ( k=kw o=IRIREF { emit resolve(env.base, s) k resolve(env.base, o) } )* '.'
+    | 'nest' n=nest '.' { emit n <http://synthetic.example/self> n }
+  ;
+
+/* recursive, with a grammar-driven depth cap (@maxdepth, sq-uyney) */
+nest : term [reads env.base] @maxdepth(7)
+  ::= '[' n=nest ']' { value = n }
+    | o=IRIREF { value = resolve(env.base, o) }
+  ;
 
 kw : term
 ${alts.join('\n')}

@@ -435,7 +435,7 @@ export class ParserGen {
     const hasValue = this.semTypeHasValue(p.semType);
     const rec = this.recursive.has(p.name);
     const body = [];
-    if (rec) body.push(`if (++depth > ${MAXDEPTH}) perr('MAXDEPTH');`);
+    if (rec) body.push(`if (++depth > ${p.maxdepth ?? MAXDEPTH}) perr('MAXDEPTH');`);
     if (hasValue) body.push(`let _v;`);
     this.dispatch(p.alts, ctx, body, {});
     if (rec) body.push(`depth--;`);
