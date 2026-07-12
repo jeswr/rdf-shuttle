@@ -183,18 +183,29 @@ export class ParserGen {
     if (kinds.length === 0) return 'false';
     if (kinds.length <= 3) return `matches!(self.tk, ${kinds.join(' | ')})`;
     const key = kinds.join(',');
+    const nKinds = this.an.real.length + 1;
     let nm = this.tables.get(key);
     if (!nm) {
       nm = `FS_${this.tables.size}`;
       this.tables.set(key, nm);
       const nums = kinds.map((k) => this.kindNum(k));
-      const width = this.an.real.length + 1 <= 64 ? 64 : 128;
-      if (this.an.real.length + 1 > 128) throw new Error('more than 128 token kinds: FIRST-set bitmask needs an array fallback');
-      let mask = 0n;
-      for (const n of nums) mask |= 1n << BigInt(n);
-      this.tableDefs.push(`const ${nm}: u${width} = 0x${mask.toString(16)}; // { ${kinds.join(', ')} }`);
+      if (nKinds <= 128) {
+        const width = nKinds <= 64 ? 64 : 128;
+        let mask = 0n;
+        for (const n of nums) mask |= 1n << BigInt(n);
+        this.tableDefs.push(`const ${nm}: u${width} = 0x${mask.toString(16)}; // { ${kinds.join(', ')} }`);
+      } else {
+        // >128 token kinds: a [u64; W] word array indexed by kind
+        // (sq-uyney; big keyword-rich grammars overflow a u128 mask).
+        const words = Math.ceil(nKinds / 64);
+        const arr = new Array(words).fill(0n);
+        for (const n of nums) arr[Math.floor(n / 64)] |= 1n << BigInt(n % 64);
+        this.tableDefs.push(`const ${nm}: [u64; ${words}] = [${arr.map((w) => `0x${w.toString(16)}`).join(', ')}]; // { ${kinds.join(', ')} }`);
+      }
     }
-    return `(${nm} >> self.tk) & 1 != 0`;
+    return nKinds <= 128
+      ? `(${nm} >> self.tk) & 1 != 0`
+      : `(${nm}[(self.tk >> 6) as usize] >> (self.tk & 63)) & 1 != 0`;
   }
 
   /* ---------------- item compilation ---------------- */

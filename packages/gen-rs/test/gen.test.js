@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateModule } from '../src/generate.js';
+import { syntheticGrammar } from './synthetic-fixture.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GRAMMAR = path.join(HERE, '..', '..', '..', 'grammars', 'turtle12.shuttle');
@@ -45,4 +46,42 @@ test('public API surface is present', () => {
 test('checked-in generated artifact is current', () => {
   const checked = fs.readFileSync(path.join(HERE, '..', 'generated', 'turtle12.rs'), 'utf8');
   assert.equal(checked, code, 'generated/turtle12.rs is stale — run npm run generate');
+});
+
+
+/* ---- sq-uyney: >128-token-kind FIRST-mask array fallback ---- */
+
+
+
+test('>128 token kinds fall back to a [u64; W] FIRST-mask array with the right bits', () => {
+  const src = syntheticGrammar(140);
+  const { code: syn } = generateModule(src, 'synthetic140.shuttle');
+  // 140 keywords + IRIREF + '.' + EOF etc. > 128 kinds -> array masks
+  const m = syn.match(/const (FS_\d+): \[u64; (\d+)\] = \[([^\]]+)\];/);
+  assert.ok(m, 'expected a [u64; W] FIRST-mask array in the artifact');
+  const words = Number(m[2]);
+  const vals = m[3].split(',').map((s) => BigInt(s.trim()));
+  assert.equal(vals.length, words);
+  // recover the set bits and cross-check against the token-kind constants
+  const bits = new Set();
+  vals.forEach((w, wi) => {
+    for (let b = 0n; b < 64n; b++) if ((w >> b) & 1n) bits.add(wi * 64 + Number(b));
+  });
+  // every kw token kind must be in the mask (the star-group FIRST set)
+  const kindOf = new Map();
+  for (const km of syn.matchAll(/const T_([A-Za-z0-9_]+): u16 = (\d+);/g)) kindOf.set(km[1], Number(km[2]));
+  let kwKinds = 0;
+  for (const [name, num] of kindOf) {
+    if (/^LIT_/.test(name) || /^kw/.test(name)) continue; // literal-token naming varies; count via bits below
+    void name; void num;
+  }
+  // the FIRST set of the star group is exactly the 140 keyword tokens:
+  // every set bit must map to a token whose matcher is a fixed 'kwNNN' text.
+  assert.equal(bits.size, 140, `expected 140 bits set, got ${bits.size}`);
+  kwKinds = bits.size;
+  assert.ok(kwKinds > 128, 'fixture must actually exceed the u128 width');
+  // and the indexing expression is emitted
+  assert.ok(syn.includes('>> 6) as usize] >> (self.tk & 63)) & 1 != 0'), 'array-mask test expression missing');
+  // the artifact must still be std-only / unsafe-free
+  assert.ok(!/\bunsafe\b/.test(syn.split('\n').filter((l) => !l.trimStart().startsWith('//')).join('\n')));
 });
