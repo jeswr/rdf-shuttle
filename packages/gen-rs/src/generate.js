@@ -162,11 +162,16 @@ export function generateModule(grammarText, grammarFile, options = {}) {
 //! grammar: ${g.name}  target: ${g.headers.target || '?'}  profile: ${g.headers.profile || '?'}
 //! spec-ref: ${(g.headers['spec-ref'] || '').split(' — ')[0].replace(/(https?:\/\/\S+)/g, '<$1>')}
 //!
-//! One dependency-free Rust module: streaming parser (text -> triples),
+${hasSpine ? `//! One dependency-free Rust module: streaming parser (text -> triples),
 //! push parser (chunked input, bounded memory, mid-token suspension), and
 //! serializer (triples -> text) — parse and print modes of the same Shuttle
 //! relation. \`#![forbid(unsafe_code)]\`-compatible; zero dependencies
-//! beyond std.
+//! beyond std.` : `//! One dependency-free Rust module: streaming parser (text -> triples) and
+//! push parser (chunked input, whole-buffer fallback for this
+//! document-shaped grammar). PARSE-ONLY: the print mode needs the derived
+//! residual-consumption serializer (tracked upstream) — no writer symbols
+//! are emitted. \`#![forbid(unsafe_code)]\`-compatible; zero dependencies
+//! beyond std.`}
 //!
 //! Generated-code allow-list (style lints that direct-coded matchers and
 //! grammar-shaped control flow trip by construction; correctness lints all

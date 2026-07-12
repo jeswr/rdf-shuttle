@@ -3,10 +3,11 @@
 //! grammar: shaclc12ext  target: rdf-1.2  profile: shaclc
 //! spec-ref: SHACL Compact Syntax, W3C Community Group Report (<https://w3c.github.io/shacl/shacl-compact-syntax/);> SHACL 1.2 Compact Syntax Editor's Draft (<https://w3c.github.io/data-shapes/shacl12-cs/>
 //!
-//! One dependency-free Rust module: streaming parser (text -> triples),
-//! push parser (chunked input, bounded memory, mid-token suspension), and
-//! serializer (triples -> text) — parse and print modes of the same Shuttle
-//! relation. `#![forbid(unsafe_code)]`-compatible; zero dependencies
+//! One dependency-free Rust module: streaming parser (text -> triples) and
+//! push parser (chunked input, whole-buffer fallback for this
+//! document-shaped grammar). PARSE-ONLY: the print mode needs the derived
+//! residual-consumption serializer (tracked upstream) — no writer symbols
+//! are emitted. `#![forbid(unsafe_code)]`-compatible; zero dependencies
 //! beyond std.
 //!
 //! Generated-code allow-list (style lints that direct-coded matchers and
