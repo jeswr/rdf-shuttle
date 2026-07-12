@@ -131,7 +131,13 @@ function tupleCurie(gen, clause) {
  * Generator
  * ================================================================= */
 
-export function genResidualSerializer(g, an, makeStandaloneMatchers, gen) {
+/**
+ * Extract the BACKEND-AGNOSTIC print model (vocabulary, keyword tables,
+ * oracle registry, print{} inversion defaults, profile-gated layer flags,
+ * numeric/boolean lexical data, full-match token list) from the grammar
+ * AST. Shared by the JS and Rust residual-serializer backends.
+ */
+export function extractShaclcPrintModel(g, gen) {
   /* ---- vocabulary and punctuation, extracted from the grammar ---- */
 
   const rdfType = emitPred(gen, need(g, 'shaclcDoc'));
@@ -304,8 +310,6 @@ export function genResidualSerializer(g, an, makeStandaloneMatchers, gen) {
   })();
   const fmTokens = [...new Set([intToken, ...numCases.map((c) => c.token), 'PN_PREFIX', 'LANG_DIR'])]
     .filter((t) => g.tokenByName.has(t));
-  const fmCode = makeStandaloneMatchers(fmTokens);
-  const pnLocalCode = derivePnLocalCode(g);
 
   const XSD_STRING = 'http://www.w3.org/2001/XMLSchema#string';
   const RDF_LANGSTR = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#langString';
@@ -374,6 +378,43 @@ export function genResidualSerializer(g, an, makeStandaloneMatchers, gen) {
     minDefault,
     maxDefault,
   };
+
+  return {
+    V,
+    KW,
+    nodeParamMap,
+    propParamMap,
+    nodeKindMap,
+    pathMods,
+    predeclared,
+    ext: { annotation: extAnnotation, pc: extPc, ttl: extTtl },
+    minGuarded,
+    hasTT,
+    emptyArrayEmit,
+    oracleName,
+    intToken,
+    numCases,
+    boolInfo,
+    fmTokens,
+  };
+}
+
+export function genResidualSerializer(g, an, makeStandaloneMatchers, gen) {
+  const M = extractShaclcPrintModel(g, gen);
+  const { V, KW, oracleName, intToken, numCases, boolInfo } = M;
+  const nodeParamMap = M.nodeParamMap;
+  const propParamMap = M.propParamMap;
+  const nodeKindMap = M.nodeKindMap;
+  const pathMods = M.pathMods;
+  const predeclared = M.predeclared;
+  const extAnnotation = M.ext.annotation;
+  const extPc = M.ext.pc;
+  const extTtl = M.ext.ttl;
+  const minGuarded = M.minGuarded;
+  const hasTT = M.hasTT;
+  const emptyArrayEmit = M.emptyArrayEmit;
+  const fmCode = makeStandaloneMatchers(M.fmTokens);
+  const pnLocalCode = derivePnLocalCode(g);
 
   const numGuardCode = numCases.map((c) =>
     `  if (dtv === ${JSON.stringify(c.dt)} && fm_${c.token}(v)) return v;`).join('\n');

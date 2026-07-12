@@ -71,7 +71,7 @@ modes, extended accepted by `shaclc12ext` and **rejected** by the strict
 are absent from the strict parse tables), negatives rejected by both — again
 as a byte diff against the gen-js artifacts.
 
-### SHACL-CS artifacts (parse-only for now)
+### SHACL-CS artifacts
 
 `shaclc12ext.shuttle` exercises the v0.1 constructs beyond the Turtle spine:
 `@profile` layers (subtractive: excluded productions become clean
@@ -82,10 +82,17 @@ guard if-let-narrows the option binding), pair-valued productions
 (`(Term, Term)`), option-valued productions (a `value = none` alternative
 makes the return type `Option<T>`), env map-literal inits (the five
 predeclared prefixes), `import` curie tables, `int()` + comparisons, and the
-whole-buffer push fallback for document-shaped start productions. These
-artifacts are **parse-only**: print mode needs the residual-consumption
-serializer (derived in gen-js; Rust port tracked upstream) — no writer
-symbols are emitted, so consumers get compile-time absence, not a panic.
+whole-buffer push fallback for document-shaped start productions — plus the
+**residual-consumption printer** (spec §8): `write_triples` /
+`print_with_residual` start with the whole graph as a residual, each
+printed construct consumes the triples it re-emits on parse, and a
+non-empty residual is the typed "not compact-expressible" verdict
+(`ResidualError` / `ResidualPrint`). The oracle never runs backward (the
+consumed predicate discharges it), the `print {}` defaults regenerate
+suppressed bounds, a strict-profile graph carrying extension-layer
+constructs residualizes by construction, and the printer's OUTPUT BYTES
+are identical to the gen-js printer's on every printable corpus graph
+(the `sers`/`sere` dump legs are byte-diffed).
 
 ## Consuming the artifact
 

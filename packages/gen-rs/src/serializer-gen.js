@@ -49,6 +49,88 @@ function curieIri(e) {
   return NS[e.prefix] + e.local;
 }
 
+/**
+ * Derive the Rust `esc_local` (PN_LOCAL escaping) helper from the grammar's
+ * PN_LOCAL token. Shared by the Turtle-spine and residual serializers.
+ */
+export function derivePnLocalRs(g) {
+  let pnLocalCode = `fn esc_local(_s: &str) -> Option<String> { None }`;
+  const pnl = g.tokenByName.get('PN_LOCAL');
+  if (pnl && pnl.pattern.k === 'seq') {
+    const elems = (n) => (n.k === 'alt' ? n.items : [n]);
+    const charsetUnion = (els) => {
+      let acc = [];
+      for (const el of els) {
+        const r = resolveCharset(el, g);
+        if (r !== null) acc = acc.concat(r);
+      }
+      acc.sort((a, b) => a[0] - b[0]);
+      const merged = [];
+      for (const r of acc) {
+        const last = merged[merged.length - 1];
+        if (last && r[0] <= last[1] + 1) last[1] = Math.max(last[1], r[1]);
+        else merged.push([...r]);
+      }
+      return merged;
+    };
+    const firstEls = elems(pnl.pattern.items[0]);
+    const tail = pnl.pattern.items[1]; // Opt(Seq[Star(X), Y])
+    let midEls = firstEls;
+    let lastEls = firstEls;
+    if (tail && tail.k === 'opt' && tail.item.k === 'seq') {
+      midEls = elems(tail.item.items[0].item);
+      lastEls = elems(tail.item.items[1]);
+    }
+    let escRanges = [];
+    const findEscClass = (els) => {
+      for (const el of els) {
+        if (el.k !== 'ref') continue;
+        const frag = g.tokenByName.get(el.name);
+        if (!frag) continue;
+        if (frag.pattern.k === 'alt') { findEscClass(frag.pattern.items.map((x) => x)); continue; }
+        if (frag.pattern.k === 'seq' && frag.pattern.items[0].k === 'lit' && frag.pattern.items[0].text === '\\') {
+          const cls = frag.pattern.items[1];
+          if (cls.k === 'class') escRanges = cls.ranges;
+        }
+      }
+    };
+    findEscClass(midEls);
+    pnLocalCode = `
+#[inline]
+fn pn_first(c: u32) -> bool { ${rangesTest(charsetUnion(firstEls), 'c')} }
+#[inline]
+fn pn_mid(c: u32) -> bool { ${rangesTest(charsetUnion(midEls), 'c')} }
+#[inline]
+fn pn_last(c: u32) -> bool { ${rangesTest(charsetUnion(lastEls), 'c')} }
+#[inline]
+fn pn_esc(c: u32) -> bool { ${escRanges.length ? rangesTest(escRanges, 'c') : 'false'} }
+
+/// Escape an IRI suffix as a PN_LOCAL, or None if not expressible.
+fn esc_local(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let n = b.len();
+    let mut out = String::with_capacity(n + 2);
+    let mut i = 0;
+    while i < n {
+        let (cp, w) = cp_at(b, i);
+        let ok = if i == 0 { pn_first(cp) } else if i + w >= n { pn_last(cp) } else { pn_mid(cp) };
+        if ok {
+            out.push_str(&s[i..i + w]);
+        } else if pn_esc(cp) {
+            out.push('\\\\');
+            out.push_str(&s[i..i + w]);
+        } else {
+            return None;
+        }
+        i += w;
+    }
+    Some(out)
+}`;
+  }
+
+  return pnLocalCode;
+}
+
 export function genSerializer(g, an, lx) {
   const need = (name) => {
     const p = g.prodByName.get(name);
@@ -127,79 +209,7 @@ export function genSerializer(g, an, lx) {
 
   /* ---- PN_LOCAL charsets for prefixed-name locals ---- */
 
-  let pnLocalCode = `fn esc_local(_s: &str) -> Option<String> { None }`;
-  const pnl = g.tokenByName.get('PN_LOCAL');
-  if (pnl && pnl.pattern.k === 'seq') {
-    const elems = (n) => (n.k === 'alt' ? n.items : [n]);
-    const charsetUnion = (els) => {
-      let acc = [];
-      for (const el of els) {
-        const r = resolveCharset(el, g);
-        if (r !== null) acc = acc.concat(r);
-      }
-      acc.sort((a, b) => a[0] - b[0]);
-      const merged = [];
-      for (const r of acc) {
-        const last = merged[merged.length - 1];
-        if (last && r[0] <= last[1] + 1) last[1] = Math.max(last[1], r[1]);
-        else merged.push([...r]);
-      }
-      return merged;
-    };
-    const firstEls = elems(pnl.pattern.items[0]);
-    const tail = pnl.pattern.items[1]; // Opt(Seq[Star(X), Y])
-    let midEls = firstEls;
-    let lastEls = firstEls;
-    if (tail && tail.k === 'opt' && tail.item.k === 'seq') {
-      midEls = elems(tail.item.items[0].item);
-      lastEls = elems(tail.item.items[1]);
-    }
-    let escRanges = [];
-    const findEscClass = (els) => {
-      for (const el of els) {
-        if (el.k !== 'ref') continue;
-        const frag = g.tokenByName.get(el.name);
-        if (!frag) continue;
-        if (frag.pattern.k === 'alt') { findEscClass(frag.pattern.items.map((x) => x)); continue; }
-        if (frag.pattern.k === 'seq' && frag.pattern.items[0].k === 'lit' && frag.pattern.items[0].text === '\\') {
-          const cls = frag.pattern.items[1];
-          if (cls.k === 'class') escRanges = cls.ranges;
-        }
-      }
-    };
-    findEscClass(midEls);
-    pnLocalCode = `
-#[inline]
-fn pn_first(c: u32) -> bool { ${rangesTest(charsetUnion(firstEls), 'c')} }
-#[inline]
-fn pn_mid(c: u32) -> bool { ${rangesTest(charsetUnion(midEls), 'c')} }
-#[inline]
-fn pn_last(c: u32) -> bool { ${rangesTest(charsetUnion(lastEls), 'c')} }
-#[inline]
-fn pn_esc(c: u32) -> bool { ${escRanges.length ? rangesTest(escRanges, 'c') : 'false'} }
-
-/// Escape an IRI suffix as a PN_LOCAL, or None if not expressible.
-fn esc_local(s: &str) -> Option<String> {
-    let b = s.as_bytes();
-    let n = b.len();
-    let mut out = String::with_capacity(n + 2);
-    let mut i = 0;
-    while i < n {
-        let (cp, w) = cp_at(b, i);
-        let ok = if i == 0 { pn_first(cp) } else if i + w >= n { pn_last(cp) } else { pn_mid(cp) };
-        if ok {
-            out.push_str(&s[i..i + w]);
-        } else if pn_esc(cp) {
-            out.push('\\\\');
-            out.push_str(&s[i..i + w]);
-        } else {
-            return None;
-        }
-        i += w;
-    }
-    Some(out)
-}`;
-  }
+  const pnLocalCode = derivePnLocalRs(g);
 
   const XSD_STRING = 'http://www.w3.org/2001/XMLSchema#string';
 

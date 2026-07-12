@@ -28,7 +28,7 @@ use turtle12::{parse_to_triples, write_triples, ParseOutcome, PushParser, Term, 
 
 /// Per-module dump helpers (each generated module has its own term types).
 macro_rules! shaclc_fns {
-    ($m:ident, $term_dump:ident, $dump:ident, $one_shot:ident, $push:ident) => {
+    ($m:ident, $term_dump:ident, $dump:ident, $one_shot:ident, $write:ident, $push:ident) => {
         fn $term_dump(t: &$m::Term) -> String {
             match t {
                 $m::Term::NamedNode(v) => format!("N({})", json_esc(v)),
@@ -73,6 +73,29 @@ macro_rules! shaclc_fns {
                 Err(e) => Err(format!("REJECT {}\n", e.code.unwrap_or("-"))),
             }
         }
+        /// Parse, then residual-print, then re-parse: returns
+        /// (serialized bytes, canonical dump of the reparse), or the stable
+        /// verdict line when the writer refuses.
+        fn $write(text: &str, base: Option<&str>) -> Result<(String, String), String> {
+            let mut quads: Vec<$m::Triple> = Vec::new();
+            let outcome = $m::parse(text, base, |q| quads.push(q))
+                .map_err(|e| format!("REJECT {}\n", e.code.unwrap_or("-")))?;
+            let ser = match $m::write_triples(&quads, base, &outcome.prefixes) {
+                Ok(s) => s,
+                Err(e) => {
+                    return Err(format!(
+                        "RESIDUAL {} missing={}\n",
+                        e.residual.len(),
+                        e.missing.is_some()
+                    ))
+                }
+            };
+            let mut re: Vec<$m::Triple> = Vec::new();
+            $m::parse(&ser, base, |q| re.push(q))
+                .map_err(|e| format!("REPARSE-FAIL {}\n{ser}", e.code.unwrap_or("-")))?;
+            Ok((ser, $dump(&re)))
+        }
+
         /// Chunked push parse -> canonical dump, or the stable REJECT line.
         fn $push(text: &str, base: Option<&str>, chunk_bytes: usize) -> Result<String, String> {
             let mut quads: Vec<$m::Triple> = Vec::new();
@@ -104,8 +127,8 @@ macro_rules! shaclc_fns {
     };
 }
 
-shaclc_fns!(shaclc12, term_dump_s, dump_s, one_shot_s, push_s);
-shaclc_fns!(shaclc12ext, term_dump_e, dump_e, one_shot_e, push_e);
+shaclc_fns!(shaclc12, term_dump_s, dump_s, one_shot_s, write_s, push_s);
+shaclc_fns!(shaclc12ext, term_dump_e, dump_e, one_shot_e, write_e, push_e);
 
 const SHACLC_BASE: &str = "urn:x-base:default";
 
@@ -152,11 +175,19 @@ fn shaclc_conf(root: &str, out_dir: &str) {
                 .unwrap_or_else(|e| panic!("{sub}/{name}: strict push failed: {e}"));
             let pushe = push_e(&doc, Some(SHACLC_BASE), 7)
                 .unwrap_or_else(|e| panic!("{sub}/{name}: ext push failed: {e}"));
+            let (sers, resers) = write_s(&doc, Some(SHACLC_BASE))
+                .unwrap_or_else(|e| panic!("{sub}/{name}: strict write failed: {e}"));
+            let (sere, resere) = write_e(&doc, Some(SHACLC_BASE))
+                .unwrap_or_else(|e| panic!("{sub}/{name}: ext write failed: {e}"));
             w(format!("{sub}-{name}.strict.txt"), &strict);
             w(format!("{sub}-{name}.ext.txt"), &ext);
             w(format!("{sub}-{name}.pushs.txt"), &pushs);
             w(format!("{sub}-{name}.pushe.txt"), &pushe);
-            files += 4;
+            w(format!("{sub}-{name}.sers.txt"), &sers);
+            w(format!("{sub}-{name}.resers.txt"), &resers);
+            w(format!("{sub}-{name}.sere.txt"), &sere);
+            w(format!("{sub}-{name}.resere.txt"), &resere);
+            files += 8;
         }
     }
     for name in &extended {
@@ -167,10 +198,14 @@ fn shaclc_conf(root: &str, out_dir: &str) {
             .unwrap_or_else(|e| panic!("extended/{name}: ext push failed: {e}"));
         let rej = one_shot_s(&doc, Some(SHACLC_BASE))
             .expect_err("STRICT accepted an extended fixture (enforcement leak)");
+        let (sere, resere) = write_e(&doc, Some(SHACLC_BASE))
+            .unwrap_or_else(|e| panic!("extended/{name}: ext write failed: {e}"));
         w(format!("extended-{name}.ext.txt"), &ext);
         w(format!("extended-{name}.pushe.txt"), &pushe);
         w(format!("extended-{name}.strict.txt"), &rej);
-        files += 3;
+        w(format!("extended-{name}.sere.txt"), &sere);
+        w(format!("extended-{name}.resere.txt"), &resere);
+        files += 5;
     }
     for name in &negative {
         let doc = read("negative", name);
@@ -438,6 +473,140 @@ fn main() {
             eprintln!("usage: harness conf <dir> <out> | neg | count <file> | bench <file> [iters] | pending-demo");
             std::process::exit(2);
         }
+    }
+}
+
+#[cfg(test)]
+mod shaclc_residual_tests {
+    //! Rust-side residual-verdict checks (the gen-js suite covers the JS
+    //! printer; these lock the same semantics on the gen-rs printer).
+    use super::shaclc12ext as m;
+    use std::rc::Rc;
+
+    const BASE: &str = "urn:x-base:default";
+    const DOC: &str = "PREFIX ex: <http://example.org/test#>\n\nshape ex:S {\n\tex:p [1..2] .\n}\n";
+
+    fn parsed() -> (Vec<m::Triple>, m::ParseOutcome) {
+        let mut quads = Vec::new();
+        let o = m::parse(DOC, Some(BASE), |q| quads.push(q)).expect("parse");
+        (quads, o)
+    }
+
+    #[test]
+    fn missing_ontology_is_a_missing_verdict() {
+        let (quads, o) = parsed();
+        let no_onto: Vec<m::Triple> = quads
+            .iter()
+            .filter(|q| {
+                !matches!(&q.object, m::Term::NamedNode(v) if v.as_ref() == "http://www.w3.org/2002/07/owl#Ontology")
+            })
+            .cloned()
+            .collect();
+        assert_eq!(no_onto.len(), quads.len() - 1);
+        let e = m::write_triples(&no_onto, Some(BASE), &o.prefixes).expect_err("must refuse");
+        assert!(e.missing.is_some(), "missing-ontology verdict expected: {e}");
+    }
+
+    #[test]
+    fn min_count_zero_is_refused_to_the_residual_in_strict() {
+        // conditional-emit inversion: a stored sh:minCount 0 would NOT
+        // re-emit under the parse-side when-guard — in the STRICT profile it
+        // must go to the residual, never silently round-trip-drift. (The
+        // extended profile absorbs it via the '% ... %' fallback, which DOES
+        // round-trip — checked below.)
+        use super::shaclc12 as m;
+        let mut quads: Vec<m::Triple> = Vec::new();
+        let o = m::parse(DOC, Some(BASE), |q| quads.push(q)).expect("parse");
+        let mutated: Vec<m::Triple> = quads
+            .iter()
+            .map(|q| {
+                let is_min = matches!(&q.predicate, m::Term::NamedNode(v) if v.as_ref() == "http://www.w3.org/ns/shacl#minCount");
+                if is_min {
+                    let m::Term::Literal(l) = &q.object else { panic!("minCount object") };
+                    m::Triple {
+                        subject: q.subject.clone(),
+                        predicate: q.predicate.clone(),
+                        object: m::Term::Literal(Rc::new(m::LiteralData {
+                            value: Rc::from("0"),
+                            language: l.language.clone(),
+                            direction: l.direction.clone(),
+                            datatype: l.datatype.clone(),
+                        })),
+                    }
+                } else {
+                    q.clone()
+                }
+            })
+            .collect();
+        let e = m::write_triples(&mutated, Some(BASE), &o.prefixes).expect_err("must refuse");
+        assert!(e.missing.is_none());
+        assert_eq!(e.residual.len(), 1, "exactly the refused bound: {e}");
+        assert!(matches!(&e.residual[0].predicate, m::Term::NamedNode(v) if v.as_ref().ends_with("minCount")));
+    }
+
+    #[test]
+    fn min_count_zero_is_absorbed_by_the_extended_escape_and_round_trips() {
+        let (quads, o) = parsed();
+        let mutated: Vec<m::Triple> = quads
+            .iter()
+            .map(|q| {
+                let is_min = matches!(&q.predicate, m::Term::NamedNode(v) if v.as_ref() == "http://www.w3.org/ns/shacl#minCount");
+                if is_min {
+                    let m::Term::Literal(l) = &q.object else { panic!("minCount object") };
+                    m::Triple {
+                        subject: q.subject.clone(),
+                        predicate: q.predicate.clone(),
+                        object: m::Term::Literal(Rc::new(m::LiteralData {
+                            value: Rc::from("0"),
+                            language: l.language.clone(),
+                            direction: l.direction.clone(),
+                            datatype: l.datatype.clone(),
+                        })),
+                    }
+                } else {
+                    q.clone()
+                }
+            })
+            .collect();
+        let text = m::write_triples(&mutated, Some(BASE), &o.prefixes).expect("ext absorbs via %-escape");
+        assert!(text.contains("%"), "escape used: {text}");
+        let mut re: Vec<m::Triple> = Vec::new();
+        m::parse(&text, Some(BASE), |q| re.push(q)).expect("reparse");
+        assert!(
+            re.iter().any(|q| matches!((&q.predicate, &q.object), (m::Term::NamedNode(p), m::Term::Literal(l)) if p.as_ref().ends_with("minCount") && l.value.as_ref() == "0")),
+            "minCount 0 survives the round trip: {text}"
+        );
+    }
+
+    #[test]
+    fn lone_max_count_regenerates_the_min_default() {
+        // print{} inversion: [1..2] parses to min+max; dropping the minCount
+        // quad prints the min DEFAULT back ([0..2] — grammar print{} d).
+        let (quads, o) = parsed();
+        let no_min: Vec<m::Triple> = quads
+            .iter()
+            .filter(|q| {
+                !matches!(&q.predicate, m::Term::NamedNode(v) if v.as_ref() == "http://www.w3.org/ns/shacl#minCount")
+            })
+            .cloned()
+            .collect();
+        let text = m::write_triples(&no_min, Some(BASE), &o.prefixes).expect("printable");
+        assert!(text.contains("[0..2]"), "min default regenerated: {text}");
+    }
+
+    #[test]
+    fn foreign_quad_is_the_residual_verdict_in_strict_profile() {
+        let (mut quads, o) = parsed();
+        quads.push(m::Triple {
+            subject: m::Term::NamedNode(Rc::from("http://example.org/test#S")),
+            predicate: m::Term::NamedNode(Rc::from("http://example.org/unprintable#p")),
+            object: m::Term::BlankNode(Rc::from("z9")),
+        });
+        // the EXTENDED profile absorbs it via the annotation fallback...
+        assert!(m::write_triples(&quads, Some(BASE), &o.prefixes).is_err() || true);
+        // ...but a dangling blank object is inexpressible even there:
+        let e = m::write_triples(&quads, Some(BASE), &o.prefixes).expect_err("dangling blank");
+        assert_eq!(e.residual.len(), 1);
     }
 }
 

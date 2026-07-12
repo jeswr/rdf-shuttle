@@ -47,6 +47,28 @@ function oneShot(mod, doc) {
   }
 }
 
+/** Parse -> residual print -> reparse: {ok, ser, re} or the verdict line. */
+function writeShot(mod, doc) {
+  let got;
+  try {
+    got = mod.parseToQuads(doc, { baseIRI: BASE });
+  } catch (e) {
+    return { ok: false, text: `REJECT ${e.code || '-'}\n` };
+  }
+  let ser;
+  try {
+    ser = mod.writeQuads(got.quads, { baseIRI: BASE, prefixes: got.prefixes });
+  } catch (e) {
+    return { ok: false, text: `RESIDUAL ${e.residual ? e.residual.length : '?'} missing=${e.missing !== null && e.missing !== undefined}\n` };
+  }
+  try {
+    const re = mod.parseToQuads(ser, { baseIRI: BASE });
+    return { ok: true, ser, re: dump(re.quads) };
+  } catch (e) {
+    return { ok: false, text: `REPARSE-FAIL ${e.code || '-'}\n${ser}` };
+  }
+}
+
 /** Chunked push parse (7 UTF-16 units; any chunking must agree). */
 function pushShot(mod, doc) {
   try {
@@ -87,11 +109,19 @@ for (const [sub, names] of [['valid', valid], ['rdf12', rdf12]]) {
     for (const [r, label] of [[s, 'strict'], [e, 'ext'], [ps, 'pushs'], [pe, 'pushe']]) {
       if (!r.ok) throw new Error(`${sub}/${name}: ${label} parse failed: ${r.text}`);
     }
+    const ws = writeShot(strict, doc);
+    const we = writeShot(ext, doc);
+    if (!ws.ok) throw new Error(`${sub}/${name}: strict write failed: ${ws.text}`);
+    if (!we.ok) throw new Error(`${sub}/${name}: ext write failed: ${we.text}`);
     w(`${sub}-${name}.strict.txt`, s.text);
     w(`${sub}-${name}.ext.txt`, e.text);
     w(`${sub}-${name}.pushs.txt`, ps.text);
     w(`${sub}-${name}.pushe.txt`, pe.text);
-    files += 4;
+    w(`${sub}-${name}.sers.txt`, ws.ser);
+    w(`${sub}-${name}.resers.txt`, ws.re);
+    w(`${sub}-${name}.sere.txt`, we.ser);
+    w(`${sub}-${name}.resere.txt`, we.re);
+    files += 8;
   }
 }
 for (const name of extended) {
@@ -102,10 +132,14 @@ for (const name of extended) {
   if (!e.ok) throw new Error(`extended/${name}: ext parse failed: ${e.text}`);
   if (!pe.ok) throw new Error(`extended/${name}: ext push failed: ${pe.text}`);
   if (s.ok) throw new Error(`extended/${name}: STRICT accepted an extended fixture (enforcement leak)`);
+  const we = writeShot(ext, doc);
+  if (!we.ok) throw new Error(`extended/${name}: ext write failed: ${we.text}`);
   w(`extended-${name}.ext.txt`, e.text);
   w(`extended-${name}.pushe.txt`, pe.text);
   w(`extended-${name}.strict.txt`, s.text);
-  files += 3;
+  w(`extended-${name}.sere.txt`, we.ser);
+  w(`extended-${name}.resere.txt`, we.re);
+  files += 5;
 }
 for (const name of negative) {
   const doc = read('negative', name);

@@ -17,6 +17,7 @@ import { applyProfiles } from '../../gen-js/src/generate.js';
 import { analyzeTokens, genLexer } from './lexer-gen.js';
 import { ParserGen } from './parser-gen.js';
 import { genSerializer } from './serializer-gen.js';
+import { genResidualSerializer } from './residual-serializer-gen.js';
 import { curieTable, curieIriOf } from './clausec.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -44,20 +45,24 @@ export function generateModule(grammarText, grammarFile, options = {}) {
   const pg = new ParserGen(g, an, lex, gen);
   const parserOut = pg.generate();
 
-  // the print mode is derivable only for grammars carrying the Turtle
-  // statement spine; other grammars (SHACL-C) get an honest parse-only
-  // artifact until the residual-consumption serializer lands (spec §8) —
-  // no writer symbols are emitted at all (compile-time absence, not a
-  // runtime panic).
+  // three print modes: the streaming serializer for grammars carrying the
+  // Turtle statement spine, the derived residual-consumption printer for
+  // the shaclc profile (print partiality = the "not compact-expressible"
+  // verdict), and an honest parse-only artifact for anything else — no
+  // writer symbols emitted at all (compile-time absence, not a panic).
   const TURTLE_SPINE = ['statement', 'predicateObjectList', 'objectList', 'verb'];
   const hasSpine = TURTLE_SPINE.every((n) => g.prodByName.has(n));
-  const ser = hasSpine ? genSerializer(g, an, lex.lx) : { code: `
+  const hasResidual = !hasSpine && g.headers.profile === 'shaclc';
+  const ser = hasSpine
+    ? genSerializer(g, an, lex.lx)
+    : hasResidual
+      ? genResidualSerializer(g, an, lex.lx, gen)
+      : { code: `
 /* ==================================================================
  * Print mode: NOT derivable for this grammar by the v0.1 backend (the
- * serializer generator reads the Turtle statement spine). The derived
- * residual-consumption printer — whose failure residual is the
- * "not compact-expressible" verdict — is tracked upstream. No writer
- * symbols are emitted for this grammar.
+ * serializer generator reads the Turtle statement spine, and the
+ * residual-consumption printer reads the shaclc profile shapes). No
+ * writer symbols are emitted for this grammar.
  * ================================================================== */
 ` };
 
@@ -149,7 +154,7 @@ export function generateModule(grammarText, grammarFile, options = {}) {
   }
 
   let runtime = fs.readFileSync(path.join(HERE, 'runtime.inc.rs'), 'utf8');
-  if (!hasSpine) {
+  if (!hasSpine && !hasResidual) {
     // parse-only artifact: drop the print-direction escape helpers (and the
     // writer-only HashSet import) so the module compiles without dead code.
     runtime = runtime.replace(/\/\* ---- iso: escape \(print direction\) ---- \*\/[\s\S]*?(?=\/\* ---- iso: resolve)/, '');
@@ -166,7 +171,12 @@ ${hasSpine ? `//! One dependency-free Rust module: streaming parser (text -> tri
 //! push parser (chunked input, bounded memory, mid-token suspension), and
 //! serializer (triples -> text) — parse and print modes of the same Shuttle
 //! relation. \`#![forbid(unsafe_code)]\`-compatible; zero dependencies
-//! beyond std.` : `//! One dependency-free Rust module: streaming parser (text -> triples) and
+//! beyond std.` : hasResidual ? `//! One dependency-free Rust module: streaming parser (text -> triples),
+//! push parser (chunked input, whole-buffer fallback for this
+//! document-shaped grammar), and the derived residual-consumption printer
+//! (triples -> text; print succeeds iff the residual empties, and a
+//! non-empty residual is the "not compact-expressible" verdict).
+//! \`#![forbid(unsafe_code)]\`-compatible; zero dependencies beyond std.` : `//! One dependency-free Rust module: streaming parser (text -> triples) and
 //! push parser (chunked input, whole-buffer fallback for this
 //! document-shaped grammar). PARSE-ONLY: the print mode needs the derived
 //! residual-consumption serializer (tracked upstream) — no writer symbols
