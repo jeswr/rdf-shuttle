@@ -51,7 +51,7 @@ Differences from the JS artifact (all documented in the artifact header):
 ## Usage
 
 ```sh
-npm run generate    # grammars/turtle12.shuttle -> generated/turtle12.rs
+npm run generate    # turtle12.rs + shaclc12.rs (--profile rdf12) + shaclc12ext.rs (--profile rdf12,ext)
 npm test            # node-only artifact checks
 test/conformance.sh # full cross-backend identity run (needs cargo >= 1.87)
 ```
@@ -62,6 +62,30 @@ parse `.ttl`, plain round trip, abbreviated round trip, 7-byte-chunk push
 parse) and byte-diffs the dumps *and* the serialized round-trip bytes.
 A seeded-divergence mutation check (e.g. offsetting the fresh-bnode counter)
 turns the diff red — the harness is not vacuous.
+
+It then runs the **SHACL-CS legs** (`shaclc` subcommand +
+`test/dump-shaclc-js.mjs`): the whole `tests/conformance/shaclc/` corpus —
+valid + rdf12 through BOTH profile artifacts in one-shot and 7-chunk push
+modes, extended accepted by `shaclc12ext` and **rejected** by the strict
+`shaclc12` (the enforcement-leak fix, provable because the ext alternatives
+are absent from the strict parse tables), negatives rejected by both — again
+as a byte diff against the gen-js artifacts.
+
+### SHACL-CS artifacts (parse-only for now)
+
+`shaclc12ext.shuttle` exercises the v0.1 constructs beyond the Turtle spine:
+`@profile` layers (subtractive: excluded productions become clean
+`PROFILE_EXCLUDED` stubs and unreachable subtrees are pruned from the
+artifact), the `oracle` clause + `@oracle` finite decision sets (compiled to
+a static `matches!`), `emit … when` conditional emission (an `x != none`
+guard if-let-narrows the option binding), pair-valued productions
+(`(Term, Term)`), option-valued productions (a `value = none` alternative
+makes the return type `Option<T>`), env map-literal inits (the five
+predeclared prefixes), `import` curie tables, `int()` + comparisons, and the
+whole-buffer push fallback for document-shaped start productions. These
+artifacts are **parse-only**: print mode needs the residual-consumption
+serializer (derived in gen-js; Rust port tracked upstream) — no writer
+symbols are emitted, so consumers get compile-time absence, not a panic.
 
 ## Consuming the artifact
 

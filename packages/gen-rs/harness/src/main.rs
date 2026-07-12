@@ -15,10 +15,179 @@
 
 #![forbid(unsafe_code)] // the generated artifact must compile under forbid
 
+// The generated modules expose a full public API; the harness binary only
+// exercises part of each (dead_code fires on unused pub items in a bin).
+#[allow(dead_code)]
+mod shaclc12;
+#[allow(dead_code)]
+mod shaclc12ext;
 mod turtle12;
 
 use std::fmt::Write as _;
 use turtle12::{parse_to_triples, write_triples, ParseOutcome, PushParser, Term, Triple};
+
+/// Per-module dump helpers (each generated module has its own term types).
+macro_rules! shaclc_fns {
+    ($m:ident, $term_dump:ident, $dump:ident, $one_shot:ident, $push:ident) => {
+        fn $term_dump(t: &$m::Term) -> String {
+            match t {
+                $m::Term::NamedNode(v) => format!("N({})", json_esc(v)),
+                $m::Term::BlankNode(v) => format!("B({})", json_esc(v)),
+                $m::Term::Literal(l) => {
+                    let dt = if let $m::Term::NamedNode(d) = &l.datatype { d.as_ref() } else { "" };
+                    let dir = l.direction.as_ref().map_or("", |d| d.as_ref());
+                    format!(
+                        "L({},{},{},{})",
+                        json_esc(&l.value),
+                        json_esc(&l.language),
+                        json_esc(dir),
+                        json_esc(dt)
+                    )
+                }
+                $m::Term::Triple(q) => format!(
+                    "T({} {} {})",
+                    $term_dump(&q.subject),
+                    $term_dump(&q.predicate),
+                    $term_dump(&q.object)
+                ),
+            }
+        }
+        fn $dump(ts: &[$m::Triple]) -> String {
+            let mut out = String::new();
+            for q in ts {
+                let _ = writeln!(
+                    out,
+                    "{} {} {}",
+                    $term_dump(&q.subject),
+                    $term_dump(&q.predicate),
+                    $term_dump(&q.object)
+                );
+            }
+            out
+        }
+        /// One-shot parse -> canonical dump, or the stable REJECT line.
+        fn $one_shot(text: &str, base: Option<&str>) -> Result<String, String> {
+            let mut quads: Vec<$m::Triple> = Vec::new();
+            match $m::parse(text, base, |q| quads.push(q)) {
+                Ok(_) => Ok($dump(&quads)),
+                Err(e) => Err(format!("REJECT {}\n", e.code.unwrap_or("-"))),
+            }
+        }
+        /// Chunked push parse -> canonical dump, or the stable REJECT line.
+        fn $push(text: &str, base: Option<&str>, chunk_bytes: usize) -> Result<String, String> {
+            let mut quads: Vec<$m::Triple> = Vec::new();
+            let res = {
+                let mut p = $m::PushParser::new(base, |q| quads.push(q));
+                let mut i = 0;
+                let mut err = None;
+                while i < text.len() {
+                    let mut j = (i + chunk_bytes).min(text.len());
+                    while j < text.len() && !text.is_char_boundary(j) {
+                        j += 1;
+                    }
+                    if let Err(e) = p.push(&text[i..j]) {
+                        err = Some(e);
+                        break;
+                    }
+                    i = j;
+                }
+                match err {
+                    Some(e) => Err(e),
+                    None => p.end().map(|_| ()),
+                }
+            };
+            match res {
+                Ok(()) => Ok($dump(&quads)),
+                Err(e) => Err(format!("REJECT {}\n", e.code.unwrap_or("-"))),
+            }
+        }
+    };
+}
+
+shaclc_fns!(shaclc12, term_dump_s, dump_s, one_shot_s, push_s);
+shaclc_fns!(shaclc12ext, term_dump_e, dump_e, one_shot_e, push_e);
+
+const SHACLC_BASE: &str = "urn:x-base:default";
+
+/// SHACL-CS conformance dumps: valid/rdf12 parsed by BOTH artifacts
+/// (one-shot + chunked push), extended parsed by ext and REJECTED by
+/// strict, negatives rejected by both — byte-diffed against gen-js dumps.
+fn shaclc_conf(root: &str, out_dir: &str) {
+    std::fs::create_dir_all(out_dir).expect("mkdir out");
+    let list = |sub: &str| -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(format!("{root}/{sub}"))
+            .expect("read fixtures dir")
+            .filter_map(|e| {
+                let n = e.ok()?.file_name().into_string().ok()?;
+                let stem = n.strip_suffix(".shaclc")?;
+                Some(stem.to_string())
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    let read = |sub: &str, name: &str| {
+        std::fs::read_to_string(format!("{root}/{sub}/{name}.shaclc")).expect("read fixture")
+    };
+    let w = |f: String, c: &str| std::fs::write(format!("{out_dir}/{f}"), c).expect("write dump");
+
+    let valid = list("valid");
+    let rdf12 = list("rdf12");
+    let extended = list("extended");
+    let negative = list("negative");
+    assert!(valid.len() >= 44, "expected >= 44 valid pairs, found {}", valid.len());
+    assert!(extended.len() >= 14, "expected >= 14 extended pairs, found {}", extended.len());
+    assert!(rdf12.len() >= 8, "expected >= 8 rdf12 pairs, found {}", rdf12.len());
+    assert!(negative.len() >= 6, "expected >= 6 negative cases, found {}", negative.len());
+
+    let mut files = 0usize;
+    for (sub, names) in [("valid", &valid), ("rdf12", &rdf12)] {
+        for name in names {
+            let doc = read(sub, name);
+            let strict = one_shot_s(&doc, Some(SHACLC_BASE))
+                .unwrap_or_else(|e| panic!("{sub}/{name}: strict parse failed: {e}"));
+            let ext = one_shot_e(&doc, Some(SHACLC_BASE))
+                .unwrap_or_else(|e| panic!("{sub}/{name}: ext parse failed: {e}"));
+            let pushs = push_s(&doc, Some(SHACLC_BASE), 7)
+                .unwrap_or_else(|e| panic!("{sub}/{name}: strict push failed: {e}"));
+            let pushe = push_e(&doc, Some(SHACLC_BASE), 7)
+                .unwrap_or_else(|e| panic!("{sub}/{name}: ext push failed: {e}"));
+            w(format!("{sub}-{name}.strict.txt"), &strict);
+            w(format!("{sub}-{name}.ext.txt"), &ext);
+            w(format!("{sub}-{name}.pushs.txt"), &pushs);
+            w(format!("{sub}-{name}.pushe.txt"), &pushe);
+            files += 4;
+        }
+    }
+    for name in &extended {
+        let doc = read("extended", name);
+        let ext = one_shot_e(&doc, Some(SHACLC_BASE))
+            .unwrap_or_else(|e| panic!("extended/{name}: ext parse failed: {e}"));
+        let pushe = push_e(&doc, Some(SHACLC_BASE), 7)
+            .unwrap_or_else(|e| panic!("extended/{name}: ext push failed: {e}"));
+        let rej = one_shot_s(&doc, Some(SHACLC_BASE))
+            .expect_err("STRICT accepted an extended fixture (enforcement leak)");
+        w(format!("extended-{name}.ext.txt"), &ext);
+        w(format!("extended-{name}.pushe.txt"), &pushe);
+        w(format!("extended-{name}.strict.txt"), &rej);
+        files += 3;
+    }
+    for name in &negative {
+        let doc = read("negative", name);
+        let r1 = one_shot_s(&doc, Some(SHACLC_BASE)).expect_err("negative accepted by strict");
+        let r2 = one_shot_e(&doc, Some(SHACLC_BASE)).expect_err("negative accepted by ext");
+        w(format!("negative-{name}.strict.txt"), &r1);
+        w(format!("negative-{name}.ext.txt"), &r2);
+        files += 2;
+    }
+    println!(
+        "dumped {files} shaclc files ({} valid, {} rdf12, {} extended, {} negative) to {out_dir}",
+        valid.len(),
+        rdf12.len(),
+        extended.len(),
+        negative.len()
+    );
+}
 
 fn json_esc(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
@@ -241,6 +410,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("conf") => conf(&args[2], &args[3]),
+        Some("shaclc") => shaclc_conf(&args[2], &args[3]),
         Some("neg") => neg(),
         Some("bench") => bench(&args[2], args.get(3).and_then(|s| s.parse().ok()).unwrap_or(5)),
         Some("count") => {

@@ -8,10 +8,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-node src/cli.js ../../grammars/turtle12.shuttle -o generated/turtle12.rs
-(cd ../gen-js && node src/cli.js ../../grammars/turtle12.shuttle -o generated/turtle12.js)
+npm run generate
+(cd ../gen-js && npm run generate)
 
 cp generated/turtle12.rs harness/src/turtle12.rs
+cp generated/shaclc12.rs harness/src/shaclc12.rs
+cp generated/shaclc12ext.rs harness/src/shaclc12ext.rs
 (cd harness && cargo build --quiet && cargo test --quiet)
 
 RS_OUT=$(mktemp -d)
@@ -24,3 +26,10 @@ node test/dump-js.mjs ../../tests/conformance "$JS_OUT"
 diff -r "$RS_OUT" "$JS_OUT"
 harness/target/debug/shuttle-rs-harness neg
 echo "conformance identity: PASS (22 pairs x 5 modes, gen-rs == gen-js)"
+
+rm -rf "$RS_OUT" "$JS_OUT"
+mkdir -p "$RS_OUT" "$JS_OUT"
+harness/target/debug/shuttle-rs-harness shaclc ../../tests/conformance/shaclc "$RS_OUT"
+node test/dump-shaclc-js.mjs ../../tests/conformance/shaclc "$JS_OUT"
+diff -r "$RS_OUT" "$JS_OUT"
+echo "shaclc conformance identity: PASS (valid+rdf12 x {strict,ext,push-strict,push-ext}, extended accept/strict-reject, negatives; gen-rs == gen-js)"

@@ -33,6 +33,34 @@ export class ParserGen {
     this.labelCtr = 0;
     this.computeFirst();
     this.recursive = this.findRecursive();
+    this.optValued = this.findOptValued();
+    gen.optValued = this.optValued; // clausec wraps value clauses in Some()
+  }
+
+  /**
+   * Productions with a `value = none` alternative are option-valued in
+   * Rust (the JS backend just returns null there): their return type is
+   * Option<T> and every non-none value clause wraps in Some.
+   */
+  findOptValued() {
+    const found = new Set();
+    const scanItems = (items, p) => {
+      for (const it of items) {
+        if (it.kind === 'sem') {
+          for (const cl of it.clauses) {
+            if (cl.k === 'value' && cl.expr.k === 'none') found.add(p.name);
+          }
+          continue;
+        }
+        if (it.kind === 'thread') { for (const a of it.body) scanItems(a.items, p); continue; }
+        if (it.prim && it.prim.kind === 'group') for (const a of it.prim.alts) scanItems(a.items, p);
+      }
+    };
+    for (const p of this.g.prods) {
+      if (!this.semTypeHasValue(p.semType)) continue;
+      for (const a of p.alts) scanItems(a.items, p);
+    }
+    return found;
   }
 
   litKind(text) {
@@ -173,19 +201,39 @@ export class ParserGen {
 
   semTypeHasValue(semType) { return semType !== 'unit' && semType !== 'graph'; }
 
-  retTy(semType) {
+  retTy(semType, prodName = null) {
     if (semType === 'unit' || semType === 'graph') return '()';
-    if (semType === 'term' || semType === 'term!') return 'Term';
-    return 'Rc<str>';
+    const base = semType === 'term' || semType === 'term!' ? 'Term'
+      : semType === 'pair' ? '(Term, Term)'
+      : 'Rc<str>';
+    if (prodName !== null && this.optValued.has(prodName)) {
+      if (semType === 'pair') throw new Error(`opt-valued pair production '${prodName}' unsupported`);
+      return `Option<${base}>`;
+    }
+    return base;
   }
 
   calleeType(name) {
     const p = this.g.prodByName.get(name);
     if (!p) throw new Error(`unknown production '${name}'`);
     const st = p.semType;
-    if (st === 'term' || st === 'term!') return 'term';
+    const opt = this.optValued.has(name);
+    if (st === 'term' || st === 'term!') return opt ? 'optterm' : 'term';
+    if (st === 'pair') return 'pair';
     if (st === 'unit' || st === 'graph') return null;
-    return 'str';
+    return opt ? 'optstr' : 'str';
+  }
+
+  /** Runtime tuple binding for a pair-valued variable ((Term, Term)). */
+  pairBinding(name) {
+    return {
+      rs: `${name}.clone()`,
+      t: 'tuple',
+      tuple: [
+        { rs: `${name}.0.clone()`, ref: `${name}.0`, t: 'term' },
+        { rs: `${name}.1.clone()`, ref: `${name}.1`, t: 'term' },
+      ],
+    };
   }
 
   callCode(prim, ctx) {
@@ -193,6 +241,11 @@ export class ParserGen {
       const stmts = [];
       const r = compileExpr(a, ctx, stmts);
       if (stmts.length > 0) throw new Error('side-effecting call arguments unsupported');
+      if (r.t === 'tuple') {
+        // pair argument: pass the (Term, Term) tuple (or rebuild it from
+        // component clones when the binding has no whole-value form).
+        return r.rs !== undefined && r.rs !== null ? r.rs : `(${r.tuple.map((x) => x.rs).join(', ')})`;
+      }
       return r.rs;
     });
     return `self.p_${prim.name}(${args.join(', ')})?`;
@@ -253,7 +306,7 @@ export class ParserGen {
         else if (binding) {
           if (t === null) throw new Error(`binding on unit production ${prim.name}`);
           out.push(`let ${binding} = ${call};`);
-          ctx.bindings.set(binding, { rs: binding, t });
+          ctx.bindings.set(binding, t === 'pair' ? this.pairBinding(binding) : { rs: binding, t });
         } else out.push(`${call};`);
         return;
       }
@@ -383,6 +436,14 @@ export class ParserGen {
 
   /** Dispatch over alternatives via match on self.tk. */
   dispatch(alts, ctx, out, { assign = null, checked = false } = {}) {
+    if (alts.length === 0) {
+      // all alternatives excluded by the active profile: the production is
+      // dead. Reachable only through opt/star references (whose FIRST-set
+      // guards are statically false); a required reference is a generator
+      // error at the reference site.
+      out.push(`return Err(self.perr("PROFILE_EXCLUDED"));`);
+      return;
+    }
     if (alts.length === 1) {
       this.compileAlt(alts[0], ctx, out, checked, assign);
       return;
@@ -438,9 +499,20 @@ export class ParserGen {
     const paramT = (t) => {
       const base = t.replace(/\?$/, '');
       if (base === 'string' || base === 'int') return 'str';
+      if (base === 'pair') return 'pair';
       return 'term';
     };
-    for (const par of p.params) ctx.bindings.set(par.name, { rs: par.name, t: paramT(par.type) });
+    for (const par of p.params) {
+      const t = paramT(par.type);
+      ctx.bindings.set(par.name, t === 'pair' ? this.pairBinding(par.name) : { rs: par.name, t });
+    }
+    if (p.alts.length === 0) {
+      // profile selection emptied this production: a clean always-erring fn
+      // (params underscored, no value slot, no unreachable tail).
+      const deadParams = p.params.map((q) => `_${q.name}: ${paramT(q.type) === 'pair' ? '(Term, Term)' : rustTy(paramT(q.type))}`).join(', ');
+      const dc = deadParams.length > 0 ? ', ' : '';
+      return `fn p_${p.name}(&mut self${dc}${deadParams}) -> Result<${this.retTy(p.semType, p.name)}, PErr> {\nErr(self.perr("PROFILE_EXCLUDED"))\n}`;
+    }
     const hasValue = this.semTypeHasValue(p.semType);
     const rec = this.recursive.has(p.name);
     const body = [];
@@ -448,17 +520,50 @@ export class ParserGen {
       body.push(`self.depth += 1;`);
       body.push(`if self.depth > ${MAXDEPTH} { return Err(self.perr("MAXDEPTH")); }`);
     }
-    if (hasValue) body.push(`let _v: ${this.retTy(p.semType)};`);
+    if (hasValue) body.push(`let _v: ${this.retTy(p.semType, p.name)};`);
     this.dispatch(p.alts, ctx, body, {});
     if (rec) body.push(`self.depth -= 1;`);
     body.push(hasValue ? `Ok(_v)` : `Ok(())`);
-    const params = p.params.map((q) => `${q.name}: ${rustTy(paramT(q.type))}`).join(', ');
+    const params = p.params.map((q) => `${q.name}: ${paramT(q.type) === 'pair' ? '(Term, Term)' : rustTy(paramT(q.type))}`).join(', ');
     const comma = params.length > 0 ? ', ' : '';
-    return `fn p_${p.name}(&mut self${comma}${params}) -> Result<${this.retTy(p.semType)}, PErr> {\n${body.join('\n')}\n}`;
+    return `fn p_${p.name}(&mut self${comma}${params}) -> Result<${this.retTy(p.semType, p.name)}, PErr> {\n${body.join('\n')}\n}`;
+  }
+
+  /**
+   * Productions reachable from the start symbol over the (profile-filtered)
+   * alternatives. Unreachable ones — ext-only subtrees whose every caller
+   * was dropped by the profile selection — are not generated at all (no
+   * dead methods, no dead FIRST masks).
+   */
+  reachableProds() {
+    const calls = new Map();
+    const walk = (items, out) => {
+      for (const it of items) {
+        if (it.kind === 'sem') continue;
+        if (it.kind === 'thread') { for (const a of it.body) walk(a.items, out); continue; }
+        if (it.prim.kind === 'call') out.add(it.prim.name);
+        if (it.prim.kind === 'group') for (const a of it.prim.alts) walk(a.items, out);
+      }
+    };
+    for (const p of this.g.prods) {
+      const out = new Set();
+      for (const a of p.alts) walk(a.items, out);
+      calls.set(p.name, out);
+    }
+    const reachable = new Set();
+    const stack = [this.g.headers.start];
+    while (stack.length) {
+      const q = stack.pop();
+      if (reachable.has(q)) continue;
+      reachable.add(q);
+      for (const r of calls.get(q) || []) stack.push(r);
+    }
+    return reachable;
   }
 
   generate() {
-    const fns = this.g.prods.map((p) => this.production(p));
+    const reachable = this.reachableProds();
+    const fns = this.g.prods.filter((p) => reachable.has(p.name)).map((p) => this.production(p));
     return { code: fns.join('\n\n') };
   }
 }

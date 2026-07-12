@@ -13,14 +13,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseGrammar } from '../../gen-js/src/meta.js';
+import { applyProfiles } from '../../gen-js/src/generate.js';
 import { analyzeTokens, genLexer } from './lexer-gen.js';
 import { ParserGen } from './parser-gen.js';
 import { genSerializer } from './serializer-gen.js';
+import { curieTable, curieIriOf } from './clausec.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-export function generateModule(grammarText, grammarFile) {
+export function generateModule(grammarText, grammarFile, options = {}) {
   const g = parseGrammar(grammarText, grammarFile);
+  applyProfiles(g, options.profiles || null);
   const an = analyzeTokens(g);
   const lex = genLexer(g, an);
 
@@ -34,21 +37,38 @@ export function generateModule(grammarText, grammarFile) {
     else if (t === 'string') envTypes.set(e.name, 'str');
     else throw new Error(`unsupported env slot type '${t}' for env.${e.name}`);
   }
+  const hasLabels = envTypes.get('labels') === 'labelmap';
 
-  const gen = { constPool: new Map(), envTypes };
+  const gen = { constPool: new Map(), envTypes, curies: curieTable(g.imports), oracles: new Map() };
+  for (const o of g.oracles || []) gen.oracles.set(o.name, o);
   const pg = new ParserGen(g, an, lex, gen);
   const parserOut = pg.generate();
 
-  const ser = genSerializer(g, an, lex.lx);
+  // the print mode is derivable only for grammars carrying the Turtle
+  // statement spine; other grammars (SHACL-C) get an honest parse-only
+  // artifact until the residual-consumption serializer lands (spec §8) —
+  // no writer symbols are emitted at all (compile-time absence, not a
+  // runtime panic).
+  const TURTLE_SPINE = ['statement', 'predicateObjectList', 'objectList', 'verb'];
+  const hasSpine = TURTLE_SPINE.every((n) => g.prodByName.has(n));
+  const ser = hasSpine ? genSerializer(g, an, lex.lx) : { code: `
+/* ==================================================================
+ * Print mode: NOT derivable for this grammar by the v0.1 backend (the
+ * serializer generator reads the Turtle statement spine). The derived
+ * residual-consumption printer — whose failure residual is the
+ * "not compact-expressible" verdict — is tracked upstream. No writer
+ * symbols are emitted for this grammar.
+ * ================================================================== */
+` };
 
-  // start production drives the document loop; its body must be `X*`
+  // start production drives the document loop; a `X*` body gets the
+  // statement-level bounded-memory push loop, anything else falls back to
+  // whole-buffer push parsing (document-shaped grammars like SHACL-C).
   const start = g.prodByName.get(g.headers.start);
   if (!start) throw new Error(`start production ${g.headers.start} not found`);
-  const startItem = start.alts[0].items.find((i) => i.kind === 'factor');
-  if (!startItem || startItem.postfix !== 'star' || startItem.prim.kind !== 'call') {
-    throw new Error('start production must be a star over a statement-level production');
-  }
-  const stmtProd = startItem.prim.name;
+  const startFactors = start.alts[0].items.filter((i) => i.kind === 'factor');
+  const singleStar = startFactors.length === 1 && startFactors[0].postfix === 'star' && startFactors[0].prim.kind === 'call';
+  const stmtProd = singleStar ? startFactors[0].prim.name : null;
 
   /* ---- environment declarations -> machine fields ---- */
 
@@ -69,7 +89,15 @@ export function generateModule(grammarText, grammarFile) {
       envInit.push(`env_${e.name}: HashMap::new(),`);
     } else if (et === 'map') {
       envFields.push(`env_${e.name}: HashMap<String, Rc<str>>,`);
-      envInit.push(`env_${e.name}: HashMap::new(),`);
+      if (e.init && e.init.k === 'mapLit') {
+        // predeclared entries (e.g. SHACL-CS's five predeclared prefixes):
+        // seeded into the map AND the declaration-order list, matching the
+        // JS backend's `new Map(entries)` + result() surfacing.
+        const pairs = e.init.entries.map(([k, v]) => `(${JSON.stringify(k)}.to_string(), Rc::from(${JSON.stringify(v)}))`).join(', ');
+        envInit.push(`env_${e.name}: HashMap::from([${pairs}]),`);
+      } else {
+        envInit.push(`env_${e.name}: HashMap::new(),`);
+      }
     } else if (et === 'optstr') {
       envFields.push(`env_${e.name}: Option<Rc<str>>,`);
       envInit.push(`env_${e.name}: None,`);
@@ -79,8 +107,12 @@ export function generateModule(grammarText, grammarFile) {
     }
   }
   if (hasPrefixes) {
+    const pfx = g.env.find((e) => e.name === 'prefixes');
+    const seeded = pfx && pfx.init && pfx.init.k === 'mapLit'
+      ? `vec![${pfx.init.entries.map(([k]) => `${JSON.stringify(k)}.to_string()`).join(', ')}]`
+      : 'Vec::new()';
     envFields.push(`prefix_order: Vec<String>,`);
-    envInit.push(`prefix_order: Vec::new(),`);
+    envInit.push(`prefix_order: ${seeded},`);
   }
 
   /* ---- interned constants (compile-time, from core-terms) ---- */
@@ -89,6 +121,15 @@ export function generateModule(grammarText, grammarFile) {
     .map(([, id]) => `${id}: Term,`);
   const constInit = [...gen.constPool.entries()]
     .map(([iri, id]) => `${id}: Term::NamedNode(Rc::from(${JSON.stringify(iri)})),`);
+
+  /* ---- oracle decision sets (@oracle declarations) ---- */
+
+  const oracleCode = (g.oracles || []).map((o) => {
+    if (!o.set) throw new Error(`oracle '${o.name}' has no decision set (runtime oracles unsupported in this backend)`);
+    if (o.argTypes.length !== 1) throw new Error(`oracle '${o.name}': exactly one argument supported`);
+    const iris = o.set.map((e) => curieIriOf(gen, e));
+    return `/// \`@oracle ${o.name}\` — declared finite decision set (${iris.length} IRIs), compiled\n/// to a static match (parse-mode reading of spec §4.3 clause 7).\nfn or_${o.name}(t: &Term) -> bool {\n    match t {\n        Term::NamedNode(v) => matches!(v.as_ref(), ${iris.map((i) => JSON.stringify(i)).join(' | ')}),\n        _ => false,\n    }\n}`;
+  }).join('\n\n');
 
   /* ---- outcome ---- */
 
@@ -107,7 +148,14 @@ export function generateModule(grammarText, grammarFile) {
     outcomeInit.push(`version: self.env_version.as_ref().map(|v| v.to_string()),`);
   }
 
-  const runtime = fs.readFileSync(path.join(HERE, 'runtime.inc.rs'), 'utf8');
+  let runtime = fs.readFileSync(path.join(HERE, 'runtime.inc.rs'), 'utf8');
+  if (!hasSpine) {
+    // parse-only artifact: drop the print-direction escape helpers (and the
+    // writer-only HashSet import) so the module compiles without dead code.
+    runtime = runtime.replace(/\/\* ---- iso: escape \(print direction\) ---- \*\/[\s\S]*?(?=\/\* ---- iso: resolve)/, '');
+    runtime = runtime.replace('use std::collections::{HashMap, HashSet};', 'use std::collections::HashMap;');
+    if (/esc_iri|HashSet/.test(runtime)) throw new Error('parse-only runtime strip failed (markers moved in runtime.inc.rs)');
+  }
 
   const code = `//! GENERATED by @rdf-shuttle/gen-rs from ${path.basename(grammarFile)} — DO NOT EDIT.
 //!
@@ -128,13 +176,17 @@ export function generateModule(grammarText, grammarFile) {
 #![allow(clippy::nonminimal_bool)] // negated charset tests
 #![allow(clippy::needless_late_init)] // deferred-init value slots: rustc proves the grammar's value obligations
 #![allow(clippy::collapsible_if, clippy::collapsible_else_if)] // nested alternative fallbacks
+#![allow(clippy::manual_range_patterns)] // dispatch arms are FIRST-set token-kind lists (contiguity incidental)
 #![allow(clippy::too_many_lines)] // one function per production/token, however large
 
 ${runtime}
 
 /* ---- token kinds ---- */
 ${lex.constsCode}
-
+${oracleCode ? `
+/* ---- oracle decision sets (@oracle declarations) ---- */
+${oracleCode}
+` : ''}
 /* ---- parser first-set masks ---- */
 ${pg.tableDefs.join('\n')}
 
@@ -167,7 +219,7 @@ struct Machine<'i, F: FnMut(Triple)> {
     fresh_ctr: u64,
     /* push-mode statement rollback */
     push_mode: bool,
-    trail: Vec<String>,
+${hasLabels ? '    trail: Vec<String>,' : ''}
     stmt_buf: Vec<Triple>,
     on_quad: F,
     /* interned constants (compile-time, from core-terms) */
@@ -191,7 +243,7 @@ impl<'i, F: FnMut(Triple)> Machine<'i, F> {
             ${envInit.join('\n            ')}
             fresh_ctr: 0,
             push_mode,
-            trail: Vec::new(),
+${hasLabels ? '            trail: Vec::new(),' : ''}
             stmt_buf: Vec::new(),
             on_quad,
             rc_empty: Rc::from(""),
@@ -283,7 +335,7 @@ ${parserOut.code}
         Ok(())
     }
 
-    /// Push-mode statement loop. Parses statements until the buffer is
+${stmtProd !== null ? `    /// Push-mode statement loop. Parses statements until the buffer is
     /// exhausted; an INCOMPLETE suspension rolls the current statement back
     /// (fresh counter, label bindings, buffered triples) and reports the
     /// carry point. Memory held across chunks is O(current statement).
@@ -295,9 +347,9 @@ ${parserOut.code}
             Ok(()) => Ok(None),
             Err(PErr::Incomplete) => {
                 self.fresh_ctr = cp_fresh;
-                for k in std::mem::take(&mut self.trail) {
+${hasLabels ? `                for k in std::mem::take(&mut self.trail) {
                     self.env_labels.remove(&k);
-                }
+                }` : ''}
                 self.stmt_buf.clear();
                 Ok(Some(stmt_start))
             }
@@ -313,14 +365,29 @@ ${parserOut.code}
             }
             *stmt_start = self.ts;
             *cp_fresh = self.fresh_ctr;
-            self.trail.clear();
+${hasLabels ? '            self.trail.clear();' : ''}
             self.stmt_buf.clear();
             self.p_${stmtProd}()?;
             for q in self.stmt_buf.drain(..) {
                 (self.on_quad)(q);
             }
         }
-    }
+    }` : `    /// Push-mode fallback for a document-shaped start production (not a
+    /// statement star): accumulate the whole document and parse once at
+    /// end. Memory is O(document) — fine for the small documents such
+    /// grammars describe; a statement-level loop would need FOLLOW-driven
+    /// phase transitions in this driver.
+    fn parse_chunk(&mut self) -> Result<Option<usize>, SyntaxError> {
+        if !self.is_final {
+            return Ok(Some(0));
+        }
+        self.push_mode = false;
+        match self.parse_all() {
+            Ok(()) => Ok(None),
+            Err(PErr::Syntax(e)) => Err(e),
+            Err(PErr::Incomplete) => Err(SyntaxError { message: "unexpected end of input".to_string(), line: 0, column: 0, code: Some("EOF") }),
+        }
+    }`}
 }
 
 /* ==================================================================

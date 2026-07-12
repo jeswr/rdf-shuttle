@@ -17,6 +17,7 @@
 #![allow(clippy::nonminimal_bool)] // negated charset tests
 #![allow(clippy::needless_late_init)] // deferred-init value slots: rustc proves the grammar's value obligations
 #![allow(clippy::collapsible_if, clippy::collapsible_else_if)] // nested alternative fallbacks
+#![allow(clippy::manual_range_patterns)] // dispatch arms are FIRST-set token-kind lists (contiguity incidental)
 #![allow(clippy::too_many_lines)] // one function per production/token, however large
 
 /* ---- Shuttle Rust runtime: RDF term model + the primitive iso library ----

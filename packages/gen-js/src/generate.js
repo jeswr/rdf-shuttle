@@ -25,7 +25,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
  * are absent from the parse tables (and their keyword literals from the
  * lexer).
  */
-function applyProfiles(g, profiles) {
+export function applyProfiles(g, profiles) {
   if (profiles === null) return;
   const keep = new Set(profiles);
   const filterAlts = (alts) => alts.filter((a) => a.annots.profile === null || keep.has(a.annots.profile));

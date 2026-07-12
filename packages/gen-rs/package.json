@@ -11,7 +11,9 @@
     ".": "./src/generate.js"
   },
   "scripts": {
-    "generate": "node src/cli.js ../../grammars/turtle12.shuttle -o generated/turtle12.rs",
+    "generate": "npm run generate:turtle12 && npm run generate:shaclc",
+    "generate:turtle12": "node src/cli.js ../../grammars/turtle12.shuttle -o generated/turtle12.rs",
+    "generate:shaclc": "node src/cli.js ../../grammars/shaclc12ext.shuttle -o generated/shaclc12.rs --profile rdf12 && node src/cli.js ../../grammars/shaclc12ext.shuttle -o generated/shaclc12ext.rs --profile rdf12,ext",
     "test": "npm run generate && node test/gen.test.js"
   }
 }
